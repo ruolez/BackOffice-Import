@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BackOffice Invoice System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Navigation -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+            <div class="container">
+                <a class="navbar-brand" href="#">
+                    <i class="fas fa-file-invoice-dollar me-2"></i>
+                    BackOffice Invoice
+                </a>
+                <div class="navbar-nav ms-auto" id="navbar-user">
+                    <!-- Will be populated by JavaScript -->
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container mt-4">
+            <div id="alert-container"></div>
+            
+            <!-- Login/Register Section -->
+            <div id="auth-section" class="row justify-content-center">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-body">
+                            <ul class="nav nav-tabs" id="authTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="login-tab" data-bs-toggle="tab" data-bs-target="#login" type="button" role="tab">
+                                        <i class="fas fa-sign-in-alt me-2"></i>Login
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="register-tab" data-bs-toggle="tab" data-bs-target="#register" type="button" role="tab">
+                                        <i class="fas fa-user-plus me-2"></i>Register
+                                    </button>
+                                </li>
+                            </ul>
+                            
+                            <div class="tab-content mt-3" id="authTabsContent">
+                                <!-- Login Form -->
+                                <div class="tab-pane fade show active" id="login" role="tabpanel">
+                                    <form id="loginForm">
+                                        <div class="mb-3">
+                                            <label for="loginUsername" class="form-label">Username or Email</label>
+                                            <input type="text" class="form-control" id="loginUsername" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="loginPassword" class="form-label">Password</label>
+                                            <input type="password" class="form-control" id="loginPassword" required>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary w-100">
+                                            <i class="fas fa-sign-in-alt me-2"></i>Login
+                                        </button>
+                                    </form>
+                                </div>
+                                
+                                <!-- Register Form -->
+                                <div class="tab-pane fade" id="register" role="tabpanel">
+                                    <form id="registerForm">
+                                        <div class="mb-3">
+                                            <label for="registerUsername" class="form-label">Username</label>
+                                            <input type="text" class="form-control" id="registerUsername" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="registerEmail" class="form-label">Email</label>
+                                            <input type="email" class="form-control" id="registerEmail" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="registerPassword" class="form-label">Password</label>
+                                            <input type="password" class="form-control" id="registerPassword" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label for="registerConfirmPassword" class="form-label">Confirm Password</label>
+                                            <input type="password" class="form-control" id="registerConfirmPassword" required>
+                                        </div>
+                                        <button type="submit" class="btn btn-success w-100">
+                                            <i class="fas fa-user-plus me-2"></i>Register
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dashboard Section -->
+            <div id="dashboard-section" class="d-none">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <ul class="nav nav-tabs card-header-tabs" id="dashboardTabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="databases-tab" data-bs-toggle="tab" data-bs-target="#databases" type="button" role="tab">
+                                            <i class="fas fa-database me-2"></i>Databases
+                                        </button>
+                                    </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="invoice-tab" data-bs-toggle="tab" data-bs-target="#invoice" type="button" role="tab">
+                                            <i class="fas fa-file-invoice me-2"></i>Create Invoice
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                            <div class="card-body">
+                                <div class="tab-content" id="dashboardTabsContent">
+                                    <!-- Database Configuration Tab -->
+                                    <div class="tab-pane fade show active" id="databases" role="tabpanel">
+                                        <div class="d-flex justify-content-between align-items-center mb-3">
+                                            <h5 class="mb-0">Database Configurations</h5>
+                                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#databaseModal">
+                                                <i class="fas fa-plus me-2"></i>Add Database
+                                            </button>
+                                        </div>
+                                        <div id="database-list">
+                                            <!-- Will be populated by JavaScript -->
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Invoice Creation Tab -->
+                                    <div class="tab-pane fade" id="invoice" role="tabpanel">
+                                        <div id="invoice-creation-content">
+                                            <!-- Will be populated by JavaScript -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Database Configuration Modal -->
+    <div class="modal fade" id="databaseModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Database Configuration</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="databaseForm">
+                        <input type="hidden" id="databaseId">
+                        <div class="mb-3">
+                            <label for="databaseName" class="form-label">Configuration Name</label>
+                            <input type="text" class="form-control" id="databaseName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databaseServer" class="form-label">Server</label>
+                            <input type="text" class="form-control" id="databaseServer" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databasePort" class="form-label">Port</label>
+                            <input type="number" class="form-control" id="databasePort" value="1433" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databaseName" class="form-label">Database Name</label>
+                            <input type="text" class="form-control" id="databaseDbName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databaseUsername" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="databaseUsername" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databasePassword" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="databasePassword" required>
+                            <div class="form-text">Leave blank when editing to keep existing password</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="databaseDriver" class="form-label">ODBC Driver</label>
+                            <select class="form-control" id="databaseDriver" required>
+                                <option value="ODBC Driver 18 for SQL Server">ODBC Driver 18 for SQL Server</option>
+                                <option value="ODBC Driver 17 for SQL Server">ODBC Driver 17 for SQL Server</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-info" id="testConnectionBtn">
+                        <i class="fas fa-plug me-2"></i>Test Connection
+                    </button>
+                    <button type="button" class="btn btn-primary" id="saveDatabaseBtn">
+                        <i class="fas fa-save me-2"></i>Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loading-spinner" class="d-none">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="static/js/api.js"></script>
+    <script src="static/js/auth.js"></script>
+    <script src="static/js/database.js"></script>
+    <script src="static/js/invoice.js"></script>
+    <script src="static/js/app.js"></script>
+</body>
+</html>

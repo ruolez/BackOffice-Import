@@ -1,0 +1,365 @@
+import pyodbc
+import pandas as pd
+from sqlalchemy import create_engine, text
+from typing import Tuple, List, Dict, Any
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class DatabaseService:
+    def __init__(self, database_config):
+        self.config = database_config
+        self.connection_string = self._build_connection_string()
+    
+    def _safe_int_for_db(self, value):
+        """Convert value to int, using 0 for NULL values"""
+        if value in [None, '', 'NULL', 'null']:
+            return 0
+        try:
+            return int(float(value))  # Convert to float first to handle decimal strings
+        except (ValueError, TypeError):
+            return 0
+    
+    def _safe_float_for_db(self, value):
+        """Convert value to float, using 0.0 for NULL values"""
+        if value in [None, '', 'NULL', 'null']:
+            return 0.0
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def _safe_string_for_db(self, value):
+        """Convert value to string, using empty string for NULL values"""
+        if value in [None, 'NULL', 'null', '']:
+            return ''
+        return str(value) if value is not None else ''
+        
+    def _build_connection_string(self) -> str:
+        """Build SQL Server connection string"""
+        return (
+            f"DRIVER={{{self.config.driver}}};"
+            f"SERVER={self.config.server},{self.config.port};"
+            f"DATABASE={self.config.database};"
+            f"UID={self.config.username};"
+            f"PWD={self.config.password};"
+            f"TrustServerCertificate=yes;"
+        )
+    
+    def test_connection(self) -> Tuple[bool, str]:
+        """Test database connection"""
+        try:
+            with pyodbc.connect(self.connection_string, timeout=10) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                return True, "Connection successful"
+        except pyodbc.Error as e:
+            logger.error(f"Database connection failed: {e}")
+            return False, f"Connection failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during connection test: {e}")
+            return False, f"Unexpected error: {str(e)}"
+    
+    def get_items_by_upcs(self, upcs: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Get items from Items_tbl by UPC codes"""
+        try:
+            if not upcs:
+                return True, [], "No UPCs provided"
+            
+            # Create placeholders for parameterized query
+            placeholders = ','.join(['?' for _ in upcs])
+            
+            query = f"""
+            SELECT 
+                ProductID, CateID, SubCateID, ProductSKU, ProductUPC,
+                ProductDescription, ItemSize, UnitPrice, UnitCost, 
+                ItemWeight, ItemTaxID, SPPromoted, SPPromotionDescription,
+                Discontinued, UnitID, CountInUnit, ProductMessage,
+                UnitPrice as OriginalPrice, UnitQty2, UnitQty3, UnitQty4,
+                QuantOnHand, QuantOnOrder, LastReceived, LastSold,
+                ReorderLevel, ReorderQuant, ExtDescription
+            FROM Items_tbl 
+            WHERE ProductUPC IN ({placeholders})
+            """
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, upcs)
+                
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+                
+                items = []
+                for row in rows:
+                    item = dict(zip(columns, row))
+                    items.append(item)
+                
+                return True, items, f"Found {len(items)} items"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Database query failed: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during items query: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
+    
+    def get_next_invoice_number(self) -> Tuple[bool, int, str]:
+        """Get the next invoice number by incrementing the highest existing number"""
+        try:
+            query = """
+            SELECT MAX(CAST(InvoiceNumber AS INT)) as MaxInvoiceNumber
+            FROM Invoices_tbl 
+            WHERE ISNUMERIC(InvoiceNumber) = 1
+            """
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                result = cursor.fetchone()
+                
+                max_number = result.MaxInvoiceNumber if result.MaxInvoiceNumber else 0
+                next_number = max_number + 1
+                
+                return True, next_number, f"Next invoice number: {next_number}"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get next invoice number: {e}")
+            return False, 1, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting next invoice number: {e}")
+            return False, 1, f"Unexpected error: {str(e)}"
+    
+    def create_invoice(self, invoice_data: Dict[str, Any], invoice_details: List[Dict[str, Any]]) -> Tuple[bool, int, str]:
+        """Create a new invoice with details"""
+        try:
+            with pyodbc.connect(self.connection_string, timeout=60) as conn:
+                cursor = conn.cursor()
+                
+                # Start transaction
+                conn.autocommit = False
+                
+                try:
+                    # Insert invoice header with customer information and proper NULL handling
+                    insert_invoice_query = """
+                    INSERT INTO Invoices_tbl (
+                        InvoiceNumber, InvoiceDate, InvoiceType, InvoiceTitle,
+                        CustomerID, BusinessName, AccountNo, 
+                        PoNumber, ShipDate, Shipto, ShipAddress1, ShipAddress2, ShipContact,
+                        ShipCity, ShipState, ShipZipCode, ShipPhoneNo,
+                        DriverID, TermID, SalesRepID, ShipperID, TrackingNo, ShippingCost,
+                        TotQtyOrd, TotQtyShp, TotQtyRtrnd, NoLines, TotalWeight,
+                        InvoiceSubtotal, TotalTaxes, InvoiceTotal, 
+                        Notes, Header, Footer, Imported, Pos, Void
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    
+                    cursor.execute(insert_invoice_query, (
+                        self._safe_string_for_db(invoice_data.get('invoice_number')),        # String
+                        self._safe_string_for_db(invoice_data.get('invoice_date')),          # String
+                        self._safe_string_for_db(invoice_data.get('invoice_type', 'Purchase')), # String
+                        self._safe_string_for_db(invoice_data.get('invoice_title', 'Excel Import')), # String
+                        self._safe_int_for_db(invoice_data.get('customer_id')),              # Integer
+                        self._safe_string_for_db(invoice_data.get('business_name')),         # String
+                        self._safe_string_for_db(invoice_data.get('account_no')),            # String
+                        self._safe_string_for_db(invoice_data.get('po_number')),             # String - PO Number
+                        datetime.now(),                                                      # Date - Today's date
+                        self._safe_string_for_db(invoice_data.get('ship_to')),               # String
+                        self._safe_string_for_db(invoice_data.get('ship_address1')),         # String
+                        self._safe_string_for_db(invoice_data.get('ship_address2')),         # String
+                        self._safe_string_for_db(invoice_data.get('ship_contact')),          # String
+                        self._safe_string_for_db(invoice_data.get('ship_city')),             # String
+                        self._safe_string_for_db(invoice_data.get('ship_state')),            # String
+                        self._safe_string_for_db(invoice_data.get('ship_zipcode')),          # String
+                        self._safe_string_for_db(invoice_data.get('ship_phone')),            # String
+                        self._safe_int_for_db(invoice_data.get('driver_id')),                # Integer
+                        self._safe_int_for_db(invoice_data.get('term_id')),                  # Integer
+                        self._safe_int_for_db(invoice_data.get('sales_rep_id')),             # Integer
+                        self._safe_int_for_db(invoice_data.get('shipper_id')),               # Integer
+                        self._safe_string_for_db(invoice_data.get('tracking_no')),           # String
+                        self._safe_float_for_db(invoice_data.get('shipping_cost')),          # Money/Float
+                        self._safe_float_for_db(invoice_data.get('total_qty_ordered')),      # Float
+                        self._safe_float_for_db(invoice_data.get('total_qty_shipped')),      # Float
+                        0,                                                                   # TotQtyRtrnd = 0
+                        self._safe_int_for_db(invoice_data.get('no_lines')),                 # Integer
+                        self._safe_float_for_db(invoice_data.get('total_weight')),           # Float
+                        self._safe_float_for_db(invoice_data.get('invoice_subtotal')),       # Float
+                        self._safe_float_for_db(invoice_data.get('total_taxes')),            # Float
+                        self._safe_float_for_db(invoice_data.get('invoice_total')),          # Float
+                        self._safe_string_for_db(''),                                        # Notes - empty string
+                        self._safe_string_for_db(''),                                        # Header - empty string
+                        self._safe_string_for_db(''),                                        # Footer - empty string
+                        1,  # Imported = True
+                        0,  # Pos = False
+                        0   # Void = False
+                    ))
+                    
+                    # Get the inserted InvoiceID
+                    cursor.execute("SELECT @@IDENTITY")
+                    invoice_id = cursor.fetchone()[0]
+                    
+                    # Insert invoice details with additional fields and proper NULL handling
+                    insert_detail_query = """
+                    INSERT INTO InvoicesDetails_tbl (
+                        InvoiceID, CateID, SubCateID, ProductID, ProductSKU,
+                        ProductUPC, ProductDescription, ItemSize, UnitPrice, OriginalPrice,
+                        UnitCost, QtyOrdered, QtyShipped, ExtendedPrice, ExtendedCost,
+                        ItemWeight, ItemTaxID, Taxable, SPPromoted, SPPromotionDescription,
+                        LineMessage, UnitDesc, UnitQty, 
+                        RememberPrice, Discount, ds_Percent, Packing, ExtendedDisc,
+                        PromotionDescription, PromotionAmount, Void
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    
+                    for detail in invoice_details:
+                        cursor.execute(insert_detail_query, (
+                            invoice_id,                                                        # Integer (auto-generated)
+                            self._safe_int_for_db(detail.get('CateID')),                     # Integer
+                            self._safe_int_for_db(detail.get('SubCateID')),                  # Integer
+                            self._safe_int_for_db(detail.get('ProductID')),                  # Integer
+                            self._safe_string_for_db(detail.get('ProductSKU')),              # String
+                            self._safe_string_for_db(detail.get('ProductUPC')),              # String
+                            self._safe_string_for_db(detail.get('ProductDescription')),      # String
+                            self._safe_string_for_db(detail.get('ItemSize')),                # String
+                            self._safe_float_for_db(detail.get('UnitPrice')),                # Float
+                            self._safe_float_for_db(detail.get('OriginalPrice')),            # Float
+                            self._safe_float_for_db(detail.get('UnitCost')),                 # Float
+                            self._safe_float_for_db(detail.get('QtyOrdered')),               # Float
+                            self._safe_float_for_db(detail.get('QtyShipped')),               # Float
+                            self._safe_float_for_db(detail.get('ExtendedPrice')),            # Float
+                            self._safe_float_for_db(detail.get('ExtendedCost')),             # Float
+                            self._safe_float_for_db(detail.get('ItemWeight')),               # Float
+                            self._safe_int_for_db(detail.get('ItemTaxID')),                  # Integer
+                            1 if detail.get('Taxable', False) else 0,                        # Boolean as int
+                            1 if detail.get('SPPromoted', False) else 0,                     # Boolean as int
+                            self._safe_string_for_db(detail.get('SPPromotionDescription')),  # String
+                            self._safe_string_for_db(detail.get('LineMessage')),             # String
+                            self._safe_string_for_db(detail.get('UnitDesc')),                # String
+                            self._safe_float_for_db(detail.get('UnitQty')),                  # Float
+                            0.0,                                                             # RememberPrice = 0
+                            0.0,                                                             # Discount = 0
+                            0.0,                                                             # ds_Percent = 0
+                            self._safe_string_for_db(''),                                   # Packing = blank
+                            0.0,                                                             # ExtendedDisc = 0
+                            self._safe_string_for_db(''),                                   # PromotionDescription = blank
+                            0.0,                                                             # PromotionAmount = 0
+                            0  # Void = False
+                        ))
+                    
+                    # Commit transaction
+                    conn.commit()
+                    
+                    return True, invoice_id, f"Invoice {invoice_data['invoice_number']} created successfully"
+                    
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                
+        except pyodbc.Error as e:
+            logger.error(f"Failed to create invoice: {e}")
+            return False, 0, f"Database error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error creating invoice: {e}")
+            return False, 0, f"Unexpected error: {str(e)}"
+    
+    def search_customers_by_account(self, account_search: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Search customers by AccountNo (partial match)"""
+        try:
+            if not account_search:
+                return True, [], "No search term provided"
+            
+            query = """
+            SELECT 
+                CustomerID, AccountNo, BusinessName, Location_Number,
+                Address1, City, State, ZipCode, Phone_Number, Contactname
+            FROM Customers_tbl 
+            WHERE AccountNo LIKE ? AND Discontinued != 1
+            ORDER BY AccountNo
+            """
+            
+            search_term = f"%{account_search}%"
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (search_term,))
+                
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+                
+                customers = []
+                for row in rows:
+                    customer = dict(zip(columns, row))
+                    customers.append(customer)
+                
+                return True, customers, f"Found {len(customers)} customers"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Customer search failed: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during customer search: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
+    
+    def get_customer_by_id(self, customer_id: int) -> Tuple[bool, Dict[str, Any], str]:
+        """Get full customer record by CustomerID"""
+        try:
+            query = """
+            SELECT 
+                CustomerID, AccountNo, BusinessName, Location_Number,
+                Address1, Address2, City, State, ZipCode, Phone_Number, Fax_Number,
+                Contactname, ShipTo, ShipContact, ShipAddress1, ShipAddress2,
+                ShipCity, ShipState, ShipZipCode, ShipPhone_Number,
+                TermID, SalesRepID, RouteID, PriceLevel, TaxDefID,
+                CreditLimit, Balance, CustomerSince, Notes
+            FROM Customers_tbl 
+            WHERE CustomerID = ?
+            """
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (customer_id,))
+                
+                columns = [column[0] for column in cursor.description]
+                row = cursor.fetchone()
+                
+                if not row:
+                    return False, {}, f"Customer with ID {customer_id} not found"
+                
+                customer = dict(zip(columns, row))
+                return True, customer, "Customer found"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Customer retrieval failed: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during customer retrieval: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
+    def execute_query(self, query: str, params: List[Any] = None) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Execute a generic query and return results"""
+        try:
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+                
+                results = []
+                for row in rows:
+                    result = dict(zip(columns, row))
+                    results.append(result)
+                
+                return True, results, f"Query executed successfully, {len(results)} rows returned"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Query execution failed: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during query execution: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
