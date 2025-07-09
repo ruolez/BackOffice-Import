@@ -117,19 +117,32 @@ class DatabaseManager {
 
     async handleSave() {
         const form = document.getElementById('databaseForm');
+        const password = document.getElementById('databasePassword').value;
+        
+        // For new configs, password is required
+        if (!this.currentEditingId && !password.trim()) {
+            document.getElementById('databasePassword').setCustomValidity('Password is required');
+            form.reportValidity();
+            return;
+        } else {
+            document.getElementById('databasePassword').setCustomValidity('');
+        }
+        
         if (!form.checkValidity()) {
             form.reportValidity();
             return;
         }
 
-        const password = document.getElementById('databasePassword').value;
         const configData = {
             name: document.getElementById('databaseName').value,
             server: document.getElementById('databaseServer').value,
             port: parseInt(document.getElementById('databasePort').value),
             database: document.getElementById('databaseDbName').value,
             username: document.getElementById('databaseUsername').value,
-            driver: document.getElementById('databaseDriver').value
+            driver: document.getElementById('databaseDriver').value,
+            encrypt_connection: document.getElementById('encryptConnection').checked,
+            trust_server_certificate: document.getElementById('trustServerCertificate').checked,
+            tls_min_protocol: document.getElementById('tlsMinProtocol').value || null
         };
 
         // Only include password if it's provided (for edits, blank means keep existing)
@@ -225,6 +238,26 @@ class DatabaseManager {
         document.getElementById('databasePassword').value = ''; // Don't show password
         document.getElementById('databaseDriver').value = config.driver || 'ODBC Driver 18 for SQL Server';
         
+        // Update password field
+        const passwordField = document.getElementById('databasePassword');
+        const passwordHelp = document.getElementById('passwordHelp');
+        if (config.has_password) {
+            passwordField.removeAttribute('required');
+            passwordField.placeholder = 'Leave blank to keep existing password';
+            passwordHelp.textContent = 'Leave blank to keep existing password';
+            passwordHelp.classList.add('text-muted');
+        } else {
+            passwordField.setAttribute('required', 'required');
+            passwordField.placeholder = 'Enter password';
+            passwordHelp.textContent = 'Password is required';
+            passwordHelp.classList.remove('text-muted');
+        }
+        
+        // Load connection security options
+        document.getElementById('encryptConnection').checked = config.encrypt_connection !== undefined ? config.encrypt_connection : true;
+        document.getElementById('trustServerCertificate').checked = config.trust_server_certificate !== undefined ? config.trust_server_certificate : true;
+        document.getElementById('tlsMinProtocol').value = config.tls_min_protocol || '';
+        
         // Update modal title
         const modalTitle = document.querySelector('#databaseModal .modal-title');
         if (modalTitle) {
@@ -240,6 +273,19 @@ class DatabaseManager {
         }
         document.getElementById('databasePort').value = '1433';
         document.getElementById('databaseDriver').value = 'ODBC Driver 18 for SQL Server';
+        
+        // Reset password field
+        const passwordField = document.getElementById('databasePassword');
+        const passwordHelp = document.getElementById('passwordHelp');
+        passwordField.setAttribute('required', 'required');
+        passwordField.placeholder = 'Enter password';
+        passwordHelp.textContent = 'Password is required';
+        passwordHelp.classList.remove('text-muted');
+        
+        // Reset connection security options to defaults
+        document.getElementById('encryptConnection').checked = true;
+        document.getElementById('trustServerCertificate').checked = true;
+        document.getElementById('tlsMinProtocol').value = '';
         
         // Reset modal title
         const modalTitle = document.querySelector('#databaseModal .modal-title');

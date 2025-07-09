@@ -41,6 +41,10 @@ class DatabaseConfig(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_tested = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True)
+    # Connection security options
+    encrypt_connection = db.Column(db.Boolean, default=True)
+    trust_server_certificate = db.Column(db.Boolean, default=True)
+    tls_min_protocol = db.Column(db.String(20), nullable=True)  # Optional: 'TLSv1.0', 'TLSv1.1', 'TLSv1.2'
     
     def __repr__(self):
         return f'<DatabaseConfig {self.name}>'

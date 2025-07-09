@@ -22,7 +22,11 @@ def get_database_configs():
                 'driver': config.driver,
                 'created_at': config.created_at.isoformat(),
                 'last_tested': config.last_tested.isoformat() if config.last_tested else None,
-                'is_active': config.is_active
+                'is_active': config.is_active,
+                'encrypt_connection': getattr(config, 'encrypt_connection', True),
+                'trust_server_certificate': getattr(config, 'trust_server_certificate', True),
+                'tls_min_protocol': getattr(config, 'tls_min_protocol', None),
+                'has_password': bool(config.password)  # Indicate if password exists
             } for config in configs]
         }), 200
     except Exception as e:
@@ -61,7 +65,10 @@ def create_database_config():
             username=data['username'].strip(),
             password=data['password'],  # TODO: Encrypt this
             port=data.get('port', 1433),
-            driver=data.get('driver', 'ODBC Driver 18 for SQL Server').strip()
+            driver=data.get('driver', 'ODBC Driver 18 for SQL Server').strip(),
+            encrypt_connection=data.get('encrypt_connection', True),
+            trust_server_certificate=data.get('trust_server_certificate', True),
+            tls_min_protocol=data.get('tls_min_protocol', None)
         )
         
         db.session.add(config)
@@ -136,6 +143,16 @@ def update_database_config(config_id):
         
         if 'is_active' in data:
             config.is_active = data['is_active']
+        
+        # Update connection security options
+        if 'encrypt_connection' in data:
+            config.encrypt_connection = data['encrypt_connection']
+        
+        if 'trust_server_certificate' in data:
+            config.trust_server_certificate = data['trust_server_certificate']
+        
+        if 'tls_min_protocol' in data:
+            config.tls_min_protocol = data.get('tls_min_protocol', None)
         
         db.session.commit()
         

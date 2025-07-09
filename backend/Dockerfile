@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies and Microsoft ODBC Driver
+# Install system dependencies and ODBC Drivers
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -11,12 +11,21 @@ RUN apt-get update && apt-get install -y \
     gnupg2 \
     apt-transport-https \
     ca-certificates \
+    tdsodbc \
+    freetds-bin \
+    freetds-dev \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
     && echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Configure FreeTDS
+RUN echo "[FreeTDS]\n\
+Description = FreeTDS Driver\n\
+Driver = /usr/lib/aarch64-linux-gnu/odbc/libtdsodbc.so\n\
+Setup = /usr/lib/aarch64-linux-gnu/odbc/libtdsS.so" >> /etc/odbcinst.ini
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .

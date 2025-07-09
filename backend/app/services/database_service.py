@@ -38,18 +38,50 @@ class DatabaseService:
         
     def _build_connection_string(self) -> str:
         """Build SQL Server connection string"""
-        return (
+        # Check if server already includes instance name or port
+        server_str = self.config.server
+        if '\\' in server_str:
+            # Server has instance name, don't add port
+            server_conn = server_str
+        else:
+            # No instance name, add port
+            server_conn = f"{server_str},{self.config.port}"
+            
+        conn_str = (
             f"DRIVER={{{self.config.driver}}};"
-            f"SERVER={self.config.server},{self.config.port};"
+            f"SERVER={server_conn};"
             f"DATABASE={self.config.database};"
             f"UID={self.config.username};"
             f"PWD={self.config.password};"
-            f"TrustServerCertificate=yes;"
         )
+        
+        # Add encryption settings
+        if hasattr(self.config, 'encrypt_connection'):
+            encrypt_value = "yes" if self.config.encrypt_connection else "no"
+            conn_str += f"Encrypt={encrypt_value};"
+            
+            # For SQL Server 2012 compatibility when encryption is disabled
+            if not self.config.encrypt_connection:
+                conn_str += "Authentication=SqlPassword;"
+        
+        # Add trust server certificate setting
+        if hasattr(self.config, 'trust_server_certificate') and self.config.trust_server_certificate:
+            conn_str += "TrustServerCertificate=yes;"
+        
+        # Add minimum TLS protocol if specified
+        # Note: MinProtocol might not be supported by all ODBC drivers
+        # if hasattr(self.config, 'tls_min_protocol') and self.config.tls_min_protocol:
+        #     conn_str += f"MinProtocol={self.config.tls_min_protocol};"
+        
+        return conn_str
     
     def test_connection(self) -> Tuple[bool, str]:
         """Test database connection"""
         try:
+            # Log the connection string (without password for security)
+            safe_conn_str = self.connection_string.replace(self.config.password, '***')
+            logger.info(f"Testing connection with: {safe_conn_str}")
+            
             with pyodbc.connect(self.connection_string, timeout=10) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT 1")
@@ -57,6 +89,7 @@ class DatabaseService:
                 return True, "Connection successful"
         except pyodbc.Error as e:
             logger.error(f"Database connection failed: {e}")
+            logger.error(f"Connection string was: {safe_conn_str}")
             return False, f"Connection failed: {str(e)}"
         except Exception as e:
             logger.error(f"Unexpected error during connection test: {e}")
