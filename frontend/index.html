@@ -11,11 +11,11 @@
 <body>
     <div id="app">
         <!-- Navigation -->
-        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <nav class="navbar navbar-expand-lg navbar-dark">
             <div class="container">
                 <a class="navbar-brand" href="#">
-                    <i class="fas fa-file-invoice-dollar me-2"></i>
-                    BackOffice Invoice
+                    <i class="fas fa-file-invoice me-2"></i>
+                    BackOffice Invoice System
                 </a>
                 <div class="navbar-nav ms-auto" id="navbar-user">
                     <!-- Will be populated by JavaScript -->
@@ -35,12 +35,12 @@
                             <ul class="nav nav-tabs" id="authTabs" role="tablist">
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link active" id="login-tab" data-bs-toggle="tab" data-bs-target="#login" type="button" role="tab">
-                                        <i class="fas fa-sign-in-alt me-2"></i>Login
+                                        Login
                                     </button>
                                 </li>
                                 <li class="nav-item" role="presentation">
                                     <button class="nav-link" id="register-tab" data-bs-toggle="tab" data-bs-target="#register" type="button" role="tab">
-                                        <i class="fas fa-user-plus me-2"></i>Register
+                                        Register
                                     </button>
                                 </li>
                             </ul>
@@ -58,7 +58,7 @@
                                             <input type="password" class="form-control" id="loginPassword" required>
                                         </div>
                                         <button type="submit" class="btn btn-primary w-100">
-                                            <i class="fas fa-sign-in-alt me-2"></i>Login
+                                            Login
                                         </button>
                                     </form>
                                 </div>
@@ -83,7 +83,7 @@
                                             <input type="password" class="form-control" id="registerConfirmPassword" required>
                                         </div>
                                         <button type="submit" class="btn btn-success w-100">
-                                            <i class="fas fa-user-plus me-2"></i>Register
+                                            Register
                                         </button>
                                     </form>
                                 </div>
@@ -102,12 +102,12 @@
                                 <ul class="nav nav-tabs card-header-tabs" id="dashboardTabs" role="tablist">
                                     <li class="nav-item" role="presentation">
                                         <button class="nav-link active" id="databases-tab" data-bs-toggle="tab" data-bs-target="#databases" type="button" role="tab">
-                                            <i class="fas fa-database me-2"></i>Databases
+                                            Database Configurations
                                         </button>
                                     </li>
                                     <li class="nav-item" role="presentation">
                                         <button class="nav-link" id="invoice-tab" data-bs-toggle="tab" data-bs-target="#invoice" type="button" role="tab">
-                                            <i class="fas fa-file-invoice me-2"></i>Create Invoice
+                                            Create Invoice
                                         </button>
                                     </li>
                                 </ul>
@@ -116,10 +116,13 @@
                                 <div class="tab-content" id="dashboardTabsContent">
                                     <!-- Database Configuration Tab -->
                                     <div class="tab-pane fade show active" id="databases" role="tabpanel">
-                                        <div class="d-flex justify-content-between align-items-center mb-3">
-                                            <h5 class="mb-0">Database Configurations</h5>
+                                        <div class="d-flex justify-content-between align-items-center mb-4">
+                                            <div>
+                                                <h5 class="mb-0">Database Configurations</h5>
+                                                <p class="text-muted mb-0 small">Manage your SQL Server database connections</p>
+                                            </div>
                                             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#databaseModal">
-                                                <i class="fas fa-plus me-2"></i>Add Database
+                                                Add Database
                                             </button>
                                         </div>
                                         <div id="database-list">
@@ -190,10 +193,10 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn btn-info" id="testConnectionBtn">
-                        <i class="fas fa-plug me-2"></i>Test Connection
+                        Test Connection
                     </button>
                     <button type="button" class="btn btn-primary" id="saveDatabaseBtn">
-                        <i class="fas fa-save me-2"></i>Save
+                        Save Configuration
                     </button>
                 </div>
             </div>
