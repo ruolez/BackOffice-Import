@@ -22,7 +22,7 @@ class ExcelService:
             if not os.path.exists(filepath):
                 return False, [], "File not found"
             
-            # Read Excel file
+            # First, read Excel file to identify columns
             try:
                 df = pd.read_excel(filepath, engine='openpyxl')
             except Exception as e:
@@ -37,6 +37,19 @@ class ExcelService:
             
             # Find column mappings
             column_map = self._find_column_mappings(df.columns.tolist())
+            
+            # If UPC column is found, re-read the file with UPC as string to preserve leading zeros
+            if 'UPC' in column_map:
+                upc_column = column_map['UPC']
+                try:
+                    df = pd.read_excel(filepath, engine='openpyxl', dtype={upc_column: str})
+                except Exception as e:
+                    # Try with xlrd engine for older Excel files
+                    try:
+                        df = pd.read_excel(filepath, engine='xlrd', dtype={upc_column: str})
+                    except Exception as e2:
+                        # If dtype specification fails, continue with original df
+                        logger.warning(f"Could not re-read with UPC as string: {str(e2)}")
             
             # Check if all required columns are found
             missing_columns = []
@@ -135,7 +148,7 @@ class ExcelService:
             if not os.path.exists(filepath):
                 return False, {}, "File not found"
             
-            # Read just the header
+            # Read just the header (nrows=0 only gets column names, no need for dtype here)
             try:
                 df = pd.read_excel(filepath, nrows=0, engine='openpyxl')
             except Exception as e:
