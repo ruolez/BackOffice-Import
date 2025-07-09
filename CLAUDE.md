@@ -137,13 +137,49 @@ The application uses specific ports to avoid conflicts:
 - Frontend: 8081 (Nginx)
 - Avoid ports 3000, 5001 (used by other applications)
 
+### Database Connection Security
+
+The system provides flexible connection security options for different SQL Server versions:
+
+**SQL Server 2012 Compatibility**:
+- Use FreeTDS driver for SQL Server 2012 and older versions
+- Disable encryption for legacy servers that don't support TLS 1.2
+- Configure TrustServerCertificate=yes for self-signed certificates
+
+**Connection Security Options**:
+- **Encrypt Connection**: Enable/disable connection encryption (required for modern servers)
+- **Trust Server Certificate**: Accept self-signed certificates
+- **TLS Min Protocol**: Set minimum TLS version (1.0, 1.1, 1.2)
+- **Driver Selection**: Choose between ODBC Driver 18, Driver 17, or FreeTDS
+
+**Password Management**:
+- Database configuration passwords are stored securely
+- Editing configurations preserves existing passwords unless explicitly changed
+- Password field shows "Leave blank to keep existing password" for edits
+
 ### Security Considerations
 
 - SQLite database stored in Docker volume for persistence
-- SQL Server connections use pyodbc with TrustServerCertificate=yes
+- SQL Server connections support configurable encryption and certificate validation
 - CORS enabled for frontend-backend communication
 - Session-based authentication with Flask-Login
 - Default admin credentials should be changed in production
+
+### UI Design Philosophy
+
+The application follows modern, professional design principles:
+
+**Design System**:
+- Clean, minimalist interface with professional gray color palette
+- Consistent spacing and typography using Bootstrap 5
+- Subtle animations and hover effects (no excessive movement)
+- Accessible color contrasts and clear visual hierarchy
+
+**Color Palette**:
+- Primary: #2563eb (professional blue)
+- Secondary: #64748b (neutral gray)
+- Background: #f8fafc (light gray)
+- Text: #0f172a (dark gray)
 
 ### Development Notes
 
@@ -153,3 +189,4 @@ The application uses specific ports to avoid conflicts:
 - Excel processing uses pandas with openpyxl and xlrd engines
 - Bootstrap 5 provides responsive UI components
 - No frontend build step required (vanilla JavaScript)
+- CSS follows modern design patterns with consistent spacing and professional styling
