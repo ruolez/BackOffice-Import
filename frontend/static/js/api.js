@@ -137,6 +137,56 @@ class ApiService {
         });
     }
 
+    // Purchase Order endpoints
+    async uploadExcelPO(formData) {
+        // Remove Content-Type header for FormData
+        const headers = { ...this.headers };
+        delete headers['Content-Type'];
+
+        return this.request('/po/upload', {
+            method: 'POST',
+            body: formData,
+            headers
+        });
+    }
+
+    async createPurchaseOrder(poData) {
+        return this.request('/po/create', {
+            method: 'POST',
+            body: JSON.stringify(poData)
+        });
+    }
+
+    async getNextPONumber(databaseConfigId) {
+        return this.request(`/po/next-number/${databaseConfigId}`);
+    }
+
+    async validatePoUpcs(data) {
+        return this.request('/po/validate-upcs', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    }
+
+    // Supplier endpoints
+    async searchSuppliers(data) {
+        return this.request('/supplier/search', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    }
+
+    async getSupplier(supplierId, databaseConfigId) {
+        return this.request(`/supplier/${supplierId}?database_config_id=${databaseConfigId}`);
+    }
+
+    async validateSupplier(data) {
+        return this.request('/supplier/validate', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    }
+
     // Health check
     async healthCheck() {
         return this.request('/health');

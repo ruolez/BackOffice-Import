@@ -396,3 +396,223 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Unexpected error during query execution: {e}")
             return False, [], f"Unexpected error: {str(e)}"
+
+    def search_suppliers_by_account(self, account_search: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Search suppliers by AccountNo (partial match)"""
+        try:
+            if not account_search:
+                return True, [], "No search term provided"
+            
+            query = """
+            SELECT 
+                SupplierID, AccountNo, BusinessName, StateTaxID,
+                Address1, Address2, City, State, ZipCode, Phone_Number, 
+                Fax_Number, Contactname, Email, web_url
+            FROM Suppliers_tbl 
+            WHERE AccountNo LIKE ? AND Discontinued != 1
+            ORDER BY AccountNo
+            """
+            
+            search_term = f"%{account_search}%"
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (search_term,))
+                
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+                
+                suppliers = []
+                for row in rows:
+                    supplier = dict(zip(columns, row))
+                    suppliers.append(supplier)
+                
+                return True, suppliers, f"Found {len(suppliers)} suppliers"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Supplier search failed: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during supplier search: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
+    
+    def get_supplier_by_id(self, supplier_id: int) -> Tuple[bool, Dict[str, Any], str]:
+        """Get full supplier record by SupplierID"""
+        try:
+            query = """
+            SELECT 
+                SupplierID, AccountNo, BusinessName, StateTaxID,
+                Address1, Address2, City, State, ZipCode, Phone_Number, 
+                Fax_Number, Contactname, Email, web_url, Notes, Discontinued
+            FROM Suppliers_tbl 
+            WHERE SupplierID = ?
+            """
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (supplier_id,))
+                
+                columns = [column[0] for column in cursor.description]
+                row = cursor.fetchone()
+                
+                if not row:
+                    return False, {}, f"Supplier with ID {supplier_id} not found"
+                
+                supplier = dict(zip(columns, row))
+                return True, supplier, "Supplier found"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Supplier retrieval failed: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during supplier retrieval: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
+    def get_next_po_number(self) -> Tuple[bool, int, str]:
+        """Get the next purchase order number by incrementing the highest existing number"""
+        try:
+            # First, try to get all PO numbers and filter/convert them safely
+            query = """
+            SELECT PoNumber
+            FROM PurchaseOrders_tbl 
+            WHERE PoNumber IS NOT NULL AND PoNumber != ''
+            """
+            
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                results = cursor.fetchall()
+                
+                max_number = 0
+                
+                # Process each PO number to find the highest valid integer
+                for row in results:
+                    po_number = row.PoNumber
+                    if po_number:
+                        # Try to convert to int, skip if it fails or overflows
+                        try:
+                            # Only consider numeric values that can fit in a 32-bit int
+                            if po_number.isdigit() and len(po_number) <= 10:
+                                num_value = int(po_number)
+                                # Check if it's within reasonable bounds (avoid overflow)
+                                if 0 <= num_value <= 2147483647:  # Max 32-bit signed int
+                                    max_number = max(max_number, num_value)
+                        except (ValueError, OverflowError):
+                            # Skip invalid numbers
+                            continue
+                
+                next_number = max_number + 1
+                
+                return True, next_number, f"Next PO number: {next_number}"
+                
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get next PO number: {e}")
+            return False, 1, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting next PO number: {e}")
+            return False, 1, f"Unexpected error: {str(e)}"
+
+    def create_purchase_order(self, po_data: Dict[str, Any], po_details: List[Dict[str, Any]]) -> Tuple[bool, int, str]:
+        """Create a new purchase order with details"""
+        try:
+            with pyodbc.connect(self.connection_string, timeout=60) as conn:
+                cursor = conn.cursor()
+                
+                # Start transaction
+                conn.autocommit = False
+                
+                try:
+                    # Insert purchase order header with supplier information and proper NULL handling
+                    insert_po_query = """
+                    INSERT INTO PurchaseOrders_tbl (
+                        PoDate, RequiredDate, PoNumber, SupplierID, BusinessName, AccountNo,
+                        PoTitle, Status, Shipto, ShipAddress1, ShipAddress2, ShipContact,
+                        ShipCity, ShipState, ShipZipCode, ShipPhoneNo, EmployeeID, TermID,
+                        PoTotal, NoLines, ShipperID, TotQtyOrd, TotQtyRcv, 
+                        Notes, PoHeader, PoFooter
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    
+                    cursor.execute(insert_po_query, (
+                        datetime.now(),                                                 # PoDate - today's date
+                        datetime.now(),                                                 # RequiredDate - today's date
+                        self._safe_string_for_db(po_data.get('po_number')),            # String
+                        self._safe_int_for_db(po_data.get('supplier_id')),             # Integer
+                        self._safe_string_for_db(po_data.get('business_name')),        # String
+                        self._safe_string_for_db(po_data.get('account_no')),           # String
+                        self._safe_string_for_db(po_data.get('po_title', 'Excel Import')), # String
+                        self._safe_int_for_db(po_data.get('status', 0)),               # Integer (0 = new)
+                        self._safe_string_for_db(po_data.get('ship_to')),              # String
+                        self._safe_string_for_db(po_data.get('ship_address1')),        # String
+                        self._safe_string_for_db(po_data.get('ship_address2')),        # String
+                        self._safe_string_for_db(po_data.get('ship_contact')),         # String
+                        self._safe_string_for_db(po_data.get('ship_city')),            # String
+                        self._safe_string_for_db(po_data.get('ship_state')),           # String
+                        self._safe_string_for_db(po_data.get('ship_zipcode')),         # String
+                        self._safe_string_for_db(po_data.get('ship_phone')),           # String
+                        self._safe_int_for_db(po_data.get('employee_id')),             # Integer
+                        self._safe_int_for_db(po_data.get('term_id')),                 # Integer
+                        self._safe_float_for_db(po_data.get('po_total')),              # Money/Float
+                        self._safe_int_for_db(po_data.get('no_lines')),                # Integer
+                        self._safe_int_for_db(po_data.get('shipper_id')),              # Integer
+                        self._safe_float_for_db(po_data.get('total_qty_ordered')),     # Float
+                        self._safe_float_for_db(po_data.get('total_qty_received')),    # Float
+                        self._safe_string_for_db(''),                                  # Notes - empty string
+                        self._safe_string_for_db(''),                                  # PoHeader - empty string
+                        self._safe_string_for_db('')                                   # PoFooter - empty string
+                    ))
+                    
+                    # Get the inserted PoID
+                    cursor.execute("SELECT @@IDENTITY")
+                    po_id = cursor.fetchone()[0]
+                    
+                    # Insert purchase order details with proper NULL handling
+                    insert_detail_query = """
+                    INSERT INTO PurchaseOrdersDetails_tbl (
+                        PoID, ProductID, CateID, SubCateID, UnitDesc, UnitQty,
+                        ProductSKU, ProductUPC, SupplierSKU, ProductDescription, ItemSize,
+                        ExpDate, ReasonID, QtyOrdered, QtyReceived, ItemWeight,
+                        UnitCost, ExtendedCost, DateReceived, Committedln, Flag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    
+                    for detail in po_details:
+                        cursor.execute(insert_detail_query, (
+                            po_id,                                                          # Integer (auto-generated)
+                            self._safe_int_for_db(detail.get('ProductID')),               # Integer
+                            self._safe_int_for_db(detail.get('CateID')),                  # Integer
+                            self._safe_int_for_db(detail.get('SubCateID')),               # Integer
+                            self._safe_string_for_db(detail.get('UnitDesc')),             # String
+                            self._safe_float_for_db(detail.get('UnitQty')),               # Float
+                            self._safe_string_for_db(detail.get('ProductSKU')),           # String
+                            self._safe_string_for_db(detail.get('ProductUPC')),           # String
+                            self._safe_string_for_db(detail.get('SupplierSKU')),          # String
+                            self._safe_string_for_db(detail.get('ProductDescription')),   # String
+                            self._safe_string_for_db(detail.get('ItemSize')),             # String
+                            self._safe_string_for_db(detail.get('ExpDate')),              # String
+                            self._safe_int_for_db(detail.get('ReasonID')),                # Integer
+                            self._safe_float_for_db(detail.get('QtyOrdered')),            # Float
+                            self._safe_float_for_db(detail.get('QtyReceived')),           # Float
+                            self._safe_string_for_db(detail.get('ItemWeight')),           # String
+                            self._safe_float_for_db(detail.get('UnitCost')),              # Money/Float
+                            self._safe_float_for_db(detail.get('ExtendedCost')),          # Money/Float
+                            datetime.now(),                                               # Date - today's date
+                            1 if detail.get('Committedln', False) else 0,                # Boolean as int
+                            1 if detail.get('Flag', False) else 0                        # Boolean as int
+                        ))
+                    
+                    # Commit transaction
+                    conn.commit()
+                    
+                    return True, po_id, f"Purchase order {po_data['po_number']} created successfully"
+                    
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                
+        except pyodbc.Error as e:
+            logger.error(f"Failed to create purchase order: {e}")
+            return False, 0, f"Database error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error creating purchase order: {e}")
+            return False, 0, f"Unexpected error: {str(e)}"

@@ -51,19 +51,19 @@ class InvoiceService:
             
             for excel_row in excel_data:
                 upc = excel_row['UPC']
-                cost = excel_row['Cost']
+                # For invoices: price comes from Excel, cost comes from database
+                price_from_excel = excel_row['Cost']  # Note: Excel column is named 'Cost' but contains selling price
                 qty = excel_row['QTY']
                 
                 if upc in upc_to_item:
                     item = upc_to_item[upc]
                     
-                    # Calculate extended values (convert Decimal to float for calculations)
-                    extended_cost = cost * qty
+                    # Get cost from database (UnitCost field in Items_tbl)
+                    unit_cost = self._safe_float_convert(item.get('UnitCost', 0))
                     
-                    # Safely convert UnitPrice to float
-                    unit_price = self._safe_float_convert(item['UnitPrice'])
-                    
-                    extended_price = unit_price * qty
+                    # Calculate extended values
+                    extended_cost = unit_cost * qty
+                    extended_price = price_from_excel * qty
                     
                     # Create invoice line (convert all fields to proper types based on expected data type)
                     invoice_line = {
@@ -74,13 +74,13 @@ class InvoiceService:
                         'ProductUPC': self._safe_string_convert(item['ProductUPC']),      # String/VARCHAR
                         'ProductDescription': self._safe_string_convert(item['ProductDescription']), # String/VARCHAR
                         'ItemSize': self._safe_string_convert(item['ItemSize']),          # String/VARCHAR
-                        'UnitPrice': unit_price,                                          # Float (already converted)
+                        'UnitPrice': price_from_excel,                                    # Float (from Excel - selling price)
                         'OriginalPrice': self._safe_float_convert(item.get('OriginalPrice')), # Float (from Items_tbl)
-                        'UnitCost': cost,                                                 # Float (from Excel)
+                        'UnitCost': unit_cost,                                            # Float (from Items_tbl database)
                         'QtyOrdered': qty,                                                # Float (from Excel)
                         'QtyShipped': qty,                                                # Float (from Excel)
-                        'ExtendedPrice': extended_price,                                  # Float (calculated)
-                        'ExtendedCost': extended_cost,                                    # Float (calculated)
+                        'ExtendedPrice': extended_price,                                  # Float (calculated: price * qty)
+                        'ExtendedCost': extended_cost,                                    # Float (calculated: cost * qty)
                         'ItemWeight': self._safe_float_convert(item['ItemWeight']),       # Float
                         'ItemTaxID': self._safe_int_convert(item['ItemTaxID']),           # Integer
                         'Taxable': False,                                                 # Boolean - default to False
@@ -110,7 +110,7 @@ class InvoiceService:
                     missing_upcs.append({
                         'upc': upc,
                         'row_number': excel_row['row_number'],
-                        'cost': cost,
+                        'price': price_from_excel,  # This is the selling price from Excel
                         'qty': qty
                     })
             

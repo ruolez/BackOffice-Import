@@ -57,6 +57,7 @@ backups/
 *.temp
 .tmp/
 tmp/
+cookies.txt
 
 # Data directory (but track structure)
 backend/data/*

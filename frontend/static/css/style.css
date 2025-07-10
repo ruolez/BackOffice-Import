@@ -503,6 +503,140 @@ body {
     padding: 1.5rem;
 }
 
+/* Purchase Order Creation - mirrors invoice styling */
+.purchase-order-step {
+    position: relative;
+    padding: 1.5rem;
+    border-radius: 8px;
+    background: white;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--gray-200);
+}
+
+.purchase-order-step.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.purchase-order-step-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.purchase-order-step-number {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.875rem;
+    margin-right: 1rem;
+}
+
+.purchase-order-step-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--gray-900);
+}
+
+/* Purchase Order Preview */
+.purchase-order-preview {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+}
+
+.purchase-order-header {
+    border-bottom: 1px solid var(--gray-200);
+    padding-bottom: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.purchase-order-table {
+    margin-bottom: 1.5rem;
+}
+
+.purchase-order-table th {
+    background-color: var(--gray-50);
+    border-top: none;
+    font-weight: 600;
+    color: var(--gray-700);
+    font-size: 0.875rem;
+}
+
+.purchase-order-summary {
+    background: var(--gray-50);
+    border-radius: 6px;
+    padding: 1.25rem;
+    margin-top: 1.5rem;
+    border: 1px solid var(--gray-200);
+}
+
+.purchase-order-total {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--gray-900);
+    border-top: 1px solid var(--gray-300);
+    padding-top: 1rem;
+    margin-top: 1rem;
+}
+
+/* Supplier Search - mirrors customer styling */
+.supplier-results {
+    position: relative;
+    z-index: 1000;
+    background: white;
+    border-radius: 6px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--gray-200);
+}
+
+.supplier-results .list-group {
+    border: none;
+    border-radius: 6px;
+}
+
+.supplier-results .list-group-item {
+    border: none;
+    border-bottom: 1px solid var(--gray-200);
+    transition: background-color 0.15s ease-in-out;
+    padding: 0.75rem 1rem;
+}
+
+.supplier-results .list-group-item:hover {
+    background-color: var(--gray-50);
+    cursor: pointer;
+}
+
+.supplier-results .list-group-item:last-child {
+    border-bottom: none;
+}
+
+.selected-supplier-info .card {
+    border: 1px solid var(--success-color);
+    background: #dcfce7;
+}
+
+.selected-supplier-info .card-title {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.selected-supplier-info .card-text {
+    color: #166534;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
 /* Navbar */
 .navbar-dark {
     background-color: var(--gray-900) !important;

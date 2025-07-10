@@ -8,7 +8,7 @@ import logging
 
 # Import models and routes
 from app.models import db, User, DatabaseConfig
-from app.routes import auth, database_config, invoice, customer
+from app.routes import auth, database_config, invoice, customer, purchase_order, supplier
 
 def create_app():
     app = Flask(__name__)
@@ -37,6 +37,8 @@ def create_app():
     app.register_blueprint(database_config.bp, url_prefix='/api/database')
     app.register_blueprint(invoice.bp, url_prefix='/api/invoice')
     app.register_blueprint(customer.bp, url_prefix='/api/customer')
+    app.register_blueprint(purchase_order.bp, url_prefix='/api/po')
+    app.register_blueprint(supplier.bp, url_prefix='/api/supplier')
     
     # Create tables and run migrations
     with app.app_context():
