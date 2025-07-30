@@ -61,8 +61,10 @@ class DatabaseManager {
 
         if (this.databases.length === 0) {
             container.innerHTML = `
-                <div class="text-center py-5">
-                    <i class="fas fa-database fa-3x text-muted mb-3"></i>
+                <div class="text-center py-5 animate-in">
+                    <div class="floating">
+                        <i class="fas fa-database fa-3x text-muted mb-3"></i>
+                    </div>
                     <h5 class="text-muted">No database configurations found</h5>
                     <p class="text-muted">Click "Add Database" to create your first configuration</p>
                 </div>
@@ -70,8 +72,8 @@ class DatabaseManager {
             return;
         }
 
-        const html = this.databases.map(config => `
-            <div class="card database-card mb-3">
+        const html = this.databases.map((config, index) => `
+            <div class="card magic-card database-card mb-3 animate-in-delay-${Math.min(index, 3)}">
                 <div class="card-body">
                     <div class="row align-items-center">
                         <div class="col-md-8">
@@ -96,13 +98,13 @@ class DatabaseManager {
                         </div>
                         <div class="col-md-4 text-end">
                             <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-info" onclick="databaseManager.testConnection(${config.id})">
+                                <button class="btn btn-sm btn-outline-info" onclick="databaseManager.testConnection(${config.id})" title="Test Connection">
                                     <i class="fas fa-plug me-1"></i>Test
                                 </button>
-                                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#databaseModal" data-config-id="${config.id}">
+                                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#databaseModal" data-config-id="${config.id}" title="Edit Configuration">
                                     <i class="fas fa-edit me-1"></i>Edit
                                 </button>
-                                <button class="btn btn-sm btn-outline-danger" onclick="databaseManager.deleteConfig(${config.id})">
+                                <button class="btn btn-sm btn-outline-danger" onclick="databaseManager.deleteConfig(${config.id})" title="Delete Configuration">
                                     <i class="fas fa-trash me-1"></i>Delete
                                 </button>
                             </div>
@@ -113,6 +115,14 @@ class DatabaseManager {
         `).join('');
 
         container.innerHTML = html;
+        
+        // Trigger animations for database cards
+        setTimeout(() => {
+            const cards = container.querySelectorAll('.database-card');
+            if (window.AnimationUtils) {
+                window.AnimationUtils.animateIn(cards, 100);
+            }
+        }, 50);
     }
 
     async handleSave() {

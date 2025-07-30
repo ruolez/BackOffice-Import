@@ -74,8 +74,8 @@ class PurchaseOrderService:
                         'QtyOrdered': qty,                                                # Float (from Excel)
                         'QtyReceived': qty,                                               # Float (same as ordered - both identical)
                         'ItemWeight': self._safe_float_convert(item.get('ItemWeight', 0)), # Float
-                        'UnitDesc': self._safe_string_convert(item.get('UnitDesc', '')),  # String
-                        'UnitQty': self._safe_float_convert(item.get('UnitQty', 0)),      # Float
+                        'UnitDesc': self._safe_string_convert(item.get('UnitDesc', '')),  # String (from Units_tbl join)
+                        'UnitQty': 1.0,                                                    # Float (always set to 1)
                         'ExpDate': self._safe_string_convert(''),                         # String - empty for now
                         'ReasonID': self._safe_int_convert(0),                            # Integer - default 0
                         'DateReceived': datetime.now(),                                   # Date - today's date

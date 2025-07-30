@@ -17,12 +17,20 @@
                     <i class="fas fa-file-invoice me-2"></i>
                     BackOffice Invoice System
                 </a>
-                <div class="navbar-nav ms-auto" id="navbar-user">
+                <div class="navbar-nav ms-auto d-flex align-items-center" id="navbar-user">
+                    <!-- Dark Mode Toggle -->
+                    <button class="theme-toggle" id="themeToggle">
+                        <i class="fas fa-sun theme-toggle-icon sun-icon"></i>
+                        <i class="fas fa-moon theme-toggle-icon moon-icon"></i>
+                    </button>
                     <!-- Will be populated by JavaScript -->
                 </div>
             </div>
         </nav>
 
+        <!-- Background Grid Pattern -->
+        <div class="grid-background"></div>
+        
         <!-- Main Content -->
         <div class="container mt-4">
             <div id="alert-container"></div>
@@ -30,7 +38,7 @@
             <!-- Login/Register Section -->
             <div id="auth-section" class="row justify-content-center">
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card magic-card animate-in">
                         <div class="card-body">
                             <ul class="nav nav-tabs" id="authTabs" role="tablist">
                                 <li class="nav-item" role="presentation">
@@ -58,7 +66,7 @@
                                             <input type="password" class="form-control" id="loginPassword" required>
                                         </div>
                                         <button type="submit" class="btn btn-primary w-100">
-                                            Login
+                                            <i class="fas fa-sign-in-alt me-2"></i>Login
                                         </button>
                                     </form>
                                 </div>
@@ -83,7 +91,7 @@
                                             <input type="password" class="form-control" id="registerConfirmPassword" required>
                                         </div>
                                         <button type="submit" class="btn btn-success w-100">
-                                            Register
+                                            <i class="fas fa-user-plus me-2"></i>Register
                                         </button>
                                     </form>
                                 </div>
@@ -97,7 +105,7 @@
             <div id="dashboard-section" class="d-none">
                 <div class="row">
                     <div class="col-md-12">
-                        <div class="card">
+                        <div class="card magic-card animate-in">
                             <div class="card-header">
                                 <ul class="nav nav-tabs card-header-tabs" id="dashboardTabs" role="tablist">
                                     <li class="nav-item" role="presentation">
@@ -127,7 +135,7 @@
                                                 <p class="text-muted mb-0 small">Manage your SQL Server database connections</p>
                                             </div>
                                             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#databaseModal">
-                                                Add Database
+                                                <i class="fas fa-plus me-2"></i>Add Database
                                             </button>
                                         </div>
                                         <div id="database-list">
@@ -269,6 +277,7 @@
 
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="static/js/theme.js"></script>
     <script src="static/js/api.js"></script>
     <script src="static/js/auth.js"></script>
     <script src="static/js/database.js"></script>

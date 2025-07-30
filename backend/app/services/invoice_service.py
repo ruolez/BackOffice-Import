@@ -88,8 +88,8 @@ class InvoiceService:
                         'SPPromotionDescription': self._safe_string_convert(item.get('SPPromotionDescription', '')), # String
                         'ProductMessage': self._safe_string_convert(item.get('ProductMessage', '')), # String/VARCHAR
                         'LineMessage': self._safe_string_convert(item.get('ProductMessage', '')), # String (copy of ProductMessage)
-                        'UnitDesc': self._safe_string_convert(item.get('ItemSize', '')),  # String (derived from ItemSize)
-                        'UnitQty': self._safe_float_convert(item.get('CountInUnit')),     # Float (from Items_tbl)
+                        'UnitDesc': self._safe_string_convert(item.get('UnitDesc', '')),  # String (from Units_tbl join)
+                        'UnitQty': 1.0,                                                    # Float (always set to 1)
                         'CountInUnit': self._safe_int_convert(item.get('CountInUnit')),   # Integer
                         'excel_row': excel_row['row_number']                              # Integer (from Excel)
                     }

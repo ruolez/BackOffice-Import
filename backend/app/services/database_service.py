@@ -106,15 +106,17 @@ class DatabaseService:
             
             query = f"""
             SELECT 
-                ProductID, CateID, SubCateID, ProductSKU, ProductUPC,
-                ProductDescription, ItemSize, UnitPrice, UnitCost, 
-                ItemWeight, ItemTaxID, SPPromoted, SPPromotionDescription,
-                Discontinued, UnitID, CountInUnit, ProductMessage,
-                UnitPrice as OriginalPrice, UnitQty2, UnitQty3, UnitQty4,
-                QuantOnHand, QuantOnOrder, LastReceived, LastSold,
-                ReorderLevel, ReorderQuant, ExtDescription
-            FROM Items_tbl 
-            WHERE ProductUPC IN ({placeholders})
+                i.ProductID, i.CateID, i.SubCateID, i.ProductSKU, i.ProductUPC,
+                i.ProductDescription, i.ItemSize, i.UnitPrice, i.UnitCost, 
+                i.ItemWeight, i.ItemTaxID, i.SPPromoted, i.SPPromotionDescription,
+                i.Discontinued, i.UnitID, i.CountInUnit, i.ProductMessage,
+                i.UnitPrice as OriginalPrice, i.UnitQty2, i.UnitQty3, i.UnitQty4,
+                i.QuantOnHand, i.QuantOnOrder, i.LastReceived, i.LastSold,
+                i.ReorderLevel, i.ReorderQuant, i.ExtDescription,
+                u.UnitDesc
+            FROM Items_tbl i
+            LEFT JOIN Units_tbl u ON i.UnitID = u.UnitID
+            WHERE i.ProductUPC IN ({placeholders})
             """
             
             with pyodbc.connect(self.connection_string, timeout=30) as conn:
