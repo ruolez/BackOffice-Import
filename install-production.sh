@@ -311,7 +311,7 @@ cleanup_existing() {
     # Stop and remove containers
     if [[ -f "$APP_DIR/docker-compose.yml" ]]; then
         cd "$APP_DIR"
-        docker-compose down --remove-orphans 2>/dev/null || true
+        docker compose down --remove-orphans 2>/dev/null || true
     fi
     
     # Remove application directory
@@ -745,9 +745,9 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/docker-compose up -d
-ExecStop=/usr/bin/docker-compose down
-ExecReload=/usr/bin/docker-compose restart
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose restart
 User=$USER
 Group=$USER
 
@@ -775,19 +775,19 @@ build_and_start() {
     fi
     
     # Build and start containers
-    docker-compose build --no-cache
-    docker-compose up -d
-    
+    docker compose build --no-cache
+    docker compose up -d
+
     # Wait for services to be ready
     log "Waiting for services to start..."
     sleep 30
-    
+
     # Check if services are running
-    if docker-compose ps | grep -q "Up"; then
+    if docker compose ps | grep -q "Up"; then
         log "Services started successfully"
     else
         error "Failed to start services"
-        docker-compose logs
+        docker compose logs
         exit 1
     fi
 }
@@ -831,19 +831,19 @@ post_installation() {
 
 case "$1" in
     start)
-        docker-compose up -d
+        docker compose up -d
         ;;
     stop)
-        docker-compose down
+        docker compose down
         ;;
     restart)
-        docker-compose restart
+        docker compose restart
         ;;
     status)
-        docker-compose ps
+        docker compose ps
         ;;
     logs)
-        docker-compose logs -f
+        docker compose logs -f
         ;;
     backup)
         BACKUP_DIR="/opt/backoffice-backups"
@@ -861,8 +861,8 @@ case "$1" in
         echo "Backup created at: $backup_path"
         ;;
     update)
-        docker-compose pull
-        docker-compose up -d
+        docker compose pull
+        docker compose up -d
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|logs|backup|update}"
@@ -906,7 +906,7 @@ display_summary() {
     info "Management Commands:"
     echo "  🔧 Service status: sudo systemctl status $SERVICE_NAME"
     echo "  🔄 Restart service: sudo systemctl restart $SERVICE_NAME"
-    echo "  📋 View logs: docker-compose logs -f"
+    echo "  📋 View logs: docker compose logs -f"
     echo "  🛠️  Maintenance: backoffice-maintenance {start|stop|restart|status|logs|backup|update}"
     echo
     info "Files and Directories:"
