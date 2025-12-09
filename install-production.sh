@@ -307,23 +307,22 @@ backup_data() {
 # Clean up existing installation
 cleanup_existing() {
     log "Cleaning up existing installation..."
-    
+
     # Stop and remove containers
     if [[ -f "$APP_DIR/docker-compose.yml" ]]; then
-        cd "$APP_DIR"
-        docker compose down --remove-orphans 2>/dev/null || true
+        (cd "$APP_DIR" && docker compose down --remove-orphans 2>/dev/null) || true
     fi
-    
+
     # Remove application directory
     if [[ -d "$APP_DIR" ]]; then
         sudo rm -rf "$APP_DIR"
     fi
-    
+
     # Remove Docker volumes if clean install
     if [[ "$INSTALL_MODE" == "clean" ]]; then
         docker volume rm sqlite_data 2>/dev/null || true
     fi
-    
+
     log "Cleanup completed"
 }
 
