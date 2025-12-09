@@ -18,7 +18,7 @@ APP_NAME="BackOffice Invoice System"
 APP_DIR="/opt/backoffice-invoice"
 BACKUP_DIR="/opt/backoffice-backups"
 SERVICE_NAME="backoffice-invoice"
-FRONTEND_PORT="8081"
+FRONTEND_PORT="80"
 BACKEND_PORT="8002"
 SSL_PORT="443"
 HTTP_PORT="80"
@@ -889,10 +889,10 @@ display_summary() {
     echo
     info "Access Information:"
     if [[ "$SSL_MODE" == "self-signed" ]]; then
-        echo "  🌐 Frontend (HTTPS): https://$SERVER_IP:$SSL_PORT"
-        echo "  🌐 Frontend (HTTP):  http://$SERVER_IP:$HTTP_PORT"
+        echo "  🌐 Frontend (HTTPS): https://$SERVER_IP"
+        echo "  🌐 Frontend (HTTP):  http://$SERVER_IP"
     else
-        echo "  🌐 Frontend: http://$SERVER_IP:$FRONTEND_PORT"
+        echo "  🌐 Frontend: http://$SERVER_IP"
     fi
     echo "  🔧 Backend API: http://$SERVER_IP:$BACKEND_PORT"
     echo
