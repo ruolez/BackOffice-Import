@@ -866,8 +866,21 @@ case "$1" in
         echo "Backup created at: $backup_path"
         ;;
     update)
+        echo "Saving production configs..."
+        cp docker-compose.yml docker-compose.yml.bak 2>/dev/null || true
+        cp .env .env.bak 2>/dev/null || true
+        cp nginx-production.conf nginx-production.conf.bak 2>/dev/null || true
+
         echo "Pulling latest changes from GitHub..."
-        git pull origin main
+        git fetch origin
+        git reset --hard origin/main
+
+        echo "Restoring production configs..."
+        cp docker-compose.yml.bak docker-compose.yml 2>/dev/null || true
+        cp .env.bak .env 2>/dev/null || true
+        cp nginx-production.conf.bak nginx-production.conf 2>/dev/null || true
+        rm -f docker-compose.yml.bak .env.bak nginx-production.conf.bak
+
         echo "Rebuilding containers..."
         docker compose build --no-cache
         docker compose up -d
@@ -986,12 +999,50 @@ upgrade_application() {
         rm -rf "$tmp_dir"
         log "Repository initialized from GitHub"
     else
-        # Normal git pull
+        # Normal git pull — preserve production config files
         cd "$APP_DIR"
+
+        # Save production configs before overwriting
+        local saved_env=""
+        local saved_compose=""
+        local saved_nginx=""
+        local saved_maintenance=""
+        if [[ -f ".env" ]]; then
+            saved_env=$(cat ".env")
+        fi
+        if [[ -f "docker-compose.yml" ]]; then
+            saved_compose=$(cat "docker-compose.yml")
+        fi
+        if [[ -f "nginx-production.conf" ]]; then
+            saved_nginx=$(cat "nginx-production.conf")
+        fi
+        if [[ -f "maintenance.sh" ]]; then
+            saved_maintenance=$(cat "maintenance.sh")
+        fi
+
         log "Pulling latest changes from GitHub..."
         git fetch origin
         git reset --hard origin/main
         log "Source code updated"
+
+        # Restore production configs
+        if [[ -n "$saved_env" ]]; then
+            echo "$saved_env" > ".env"
+            log "Restored .env"
+        fi
+        if [[ -n "$saved_compose" ]]; then
+            echo "$saved_compose" > "docker-compose.yml"
+            log "Restored docker-compose.yml"
+        fi
+        if [[ -n "$saved_nginx" ]]; then
+            echo "$saved_nginx" > "nginx-production.conf"
+            log "Restored nginx-production.conf"
+        fi
+        if [[ -n "$saved_maintenance" ]]; then
+            echo "$saved_maintenance" > "maintenance.sh"
+            chmod +x "maintenance.sh"
+            log "Restored maintenance.sh"
+        fi
     fi
 
     # Rebuild and restart containers (volume with SQLite data persists automatically)
