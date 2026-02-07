@@ -18,6 +18,7 @@ APP_NAME="BackOffice Invoice System"
 APP_DIR="/opt/backoffice-invoice"
 BACKUP_DIR="/opt/backoffice-backups"
 SERVICE_NAME="backoffice-invoice"
+GITHUB_REPO="https://github.com/ruolez/BackOffice-Import.git"
 FRONTEND_PORT="80"
 BACKEND_PORT="8002"
 SSL_PORT="443"
@@ -292,10 +293,11 @@ backup_data() {
         sudo cp "$APP_DIR/.env" "$backup_path/"
     fi
     
-    # Backup Docker volumes
-    if docker volume ls | grep -q "sqlite_data"; then
-        log "Backing up SQLite database..."
-        docker run --rm -v sqlite_data:/data -v "$backup_path":/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
+    # Backup Docker volumes (find the actual volume name including compose prefix)
+    local volume_name=$(docker volume ls --format '{{.Name}}' | grep sqlite_data | head -1)
+    if [[ -n "$volume_name" ]]; then
+        log "Backing up SQLite database (volume: $volume_name)..."
+        docker run --rm -v "$volume_name":/data -v "$backup_path":/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
     fi
     
     # Set proper permissions
@@ -329,23 +331,23 @@ cleanup_existing() {
 # Setup application directory
 setup_app_directory() {
     log "Setting up application directory..."
-    
-    # Create application directory
-    sudo mkdir -p "$APP_DIR"
+
+    # Create parent directory
+    sudo mkdir -p "$(dirname "$APP_DIR")"
+
+    # Clone from GitHub
+    if command -v git &> /dev/null; then
+        log "Cloning repository from GitHub..."
+        git clone "$GITHUB_REPO" "$APP_DIR"
+    else
+        # Fallback: install git then clone
+        sudo apt-get install -y git
+        git clone "$GITHUB_REPO" "$APP_DIR"
+    fi
+
     sudo chown -R $USER:$USER "$APP_DIR"
-    
-    # Copy application files
-    local script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    
-    # Copy all files except the install script
-    rsync -av --exclude="install-production.sh" \
-              --exclude=".git" \
-              --exclude="*.log" \
-              --exclude="__pycache__" \
-              --exclude="*.pyc" \
-              "$script_dir/" "$APP_DIR/"
-    
-    log "Application files copied to $APP_DIR"
+
+    log "Application cloned to $APP_DIR"
 }
 
 # Generate SSL certificates
@@ -807,10 +809,13 @@ restore_data() {
     
     log "Restoring data from backup: $latest_backup"
     
-    # Restore SQLite database
-    if [[ -f "$latest_backup/sqlite_data.tar.gz" ]]; then
-        docker run --rm -v sqlite_data:/data -v "$latest_backup":/backup alpine tar xzf /backup/sqlite_data.tar.gz -C /data
-        log "Database restored"
+    # Restore SQLite database (find the actual volume name including compose prefix)
+    local volume_name=$(docker volume ls --format '{{.Name}}' | grep sqlite_data | head -1)
+    if [[ -n "$volume_name" ]] && [[ -f "$latest_backup/sqlite_data.tar.gz" ]]; then
+        docker run --rm -v "$volume_name":/data -v "$latest_backup":/backup alpine tar xzf /backup/sqlite_data.tar.gz -C /data
+        log "Database restored from backup (volume: $volume_name)"
+    elif [[ -f "$latest_backup/sqlite_data.tar.gz" ]]; then
+        warning "SQLite volume not found. Backup will be restored after containers start."
     fi
 }
 
@@ -848,20 +853,25 @@ case "$1" in
         BACKUP_DIR="/opt/backoffice-backups"
         backup_name="backup-$(date +%Y%m%d-%H%M%S)"
         backup_path="$BACKUP_DIR/$backup_name"
-        
+
         mkdir -p "$backup_path"
         cp docker-compose.yml "$backup_path/"
-        cp .env "$backup_path/"
-        
-        if docker volume ls | grep -q "sqlite_data"; then
-            docker run --rm -v sqlite_data:/data -v "$backup_path":/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
+        cp .env "$backup_path/" 2>/dev/null || true
+
+        volume_name=$(docker volume ls --format '{{.Name}}' | grep sqlite_data | head -1)
+        if [[ -n "$volume_name" ]]; then
+            docker run --rm -v "$volume_name":/data -v "$backup_path":/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
         fi
-        
+
         echo "Backup created at: $backup_path"
         ;;
     update)
-        docker compose pull
+        echo "Pulling latest changes from GitHub..."
+        git pull origin main
+        echo "Rebuilding containers..."
+        docker compose build --no-cache
         docker compose up -d
+        echo "Update complete!"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|logs|backup|update}"
@@ -921,6 +931,98 @@ display_summary() {
     log "Installation completed successfully! 🎉"
 }
 
+# Upgrade application from GitHub (preserves data and config)
+upgrade_application() {
+    log "Starting upgrade..."
+
+    if [[ ! -d "$APP_DIR" ]]; then
+        error "Application not found at $APP_DIR. Please run a fresh install first."
+        exit 1
+    fi
+
+    # Install git if needed
+    if ! command -v git &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y git
+    fi
+
+    # Initialize git repo if app was installed before git support
+    if [[ ! -d "$APP_DIR/.git" ]]; then
+        warning "No git repository found. Initializing from GitHub..."
+        local tmp_dir=$(mktemp -d)
+        git clone "$GITHUB_REPO" "$tmp_dir"
+
+        # Preserve production config files
+        local saved_env=""
+        local saved_compose=""
+        local saved_nginx=""
+        if [[ -f "$APP_DIR/.env" ]]; then
+            saved_env=$(cat "$APP_DIR/.env")
+        fi
+        if [[ -f "$APP_DIR/docker-compose.yml" ]]; then
+            saved_compose=$(cat "$APP_DIR/docker-compose.yml")
+        fi
+        if [[ -f "$APP_DIR/nginx-production.conf" ]]; then
+            saved_nginx=$(cat "$APP_DIR/nginx-production.conf")
+        fi
+
+        # Copy new source files (exclude production configs)
+        rsync -av --exclude=".env" \
+                  --exclude="docker-compose.yml" \
+                  --exclude="nginx-production.conf" \
+                  --exclude="ssl/" \
+                  "$tmp_dir/" "$APP_DIR/"
+
+        # Restore production config files
+        if [[ -n "$saved_env" ]]; then
+            echo "$saved_env" > "$APP_DIR/.env"
+        fi
+        if [[ -n "$saved_compose" ]]; then
+            echo "$saved_compose" > "$APP_DIR/docker-compose.yml"
+        fi
+        if [[ -n "$saved_nginx" ]]; then
+            echo "$saved_nginx" > "$APP_DIR/nginx-production.conf"
+        fi
+
+        rm -rf "$tmp_dir"
+        log "Repository initialized from GitHub"
+    else
+        # Normal git pull
+        cd "$APP_DIR"
+        log "Pulling latest changes from GitHub..."
+        git fetch origin
+        git reset --hard origin/main
+        log "Source code updated"
+    fi
+
+    # Rebuild and restart containers (volume with SQLite data persists automatically)
+    cd "$APP_DIR"
+
+    # Load environment variables if they exist
+    if [[ -f ".env" ]]; then
+        export $(cat .env | grep -v '^#' | xargs)
+    fi
+
+    log "Rebuilding containers..."
+    docker compose build --no-cache
+    docker compose up -d
+
+    # Wait for services to be ready
+    log "Waiting for services to start..."
+    sleep 15
+
+    if docker compose ps | grep -q "Up"; then
+        log "Upgrade completed successfully!"
+    else
+        error "Services failed to start after upgrade"
+        docker compose logs --tail=30
+        exit 1
+    fi
+
+    echo
+    log "Application upgraded successfully! Data and settings preserved."
+    info "Access the application at the same URL as before."
+}
+
 # Main execution
 main() {
     echo
@@ -934,10 +1036,14 @@ main() {
     check_root
     check_sudo
     check_ubuntu_version
-    
-    # Interactive configuration
-    prompt_server_ip
+
+    # Select mode first (upgrade doesn't need IP prompt)
     select_installation_mode
+
+    # Only prompt for IP on fresh installs
+    if [[ "$INSTALL_MODE" != "upgrade" ]]; then
+        prompt_server_ip
+    fi
     
     # Handle cleanup-only mode
     if [[ "$INSTALL_MODE" == "cleanup" ]]; then
@@ -946,7 +1052,13 @@ main() {
         log "Cleanup completed"
         exit 0
     fi
-    
+
+    # Handle upgrade mode (pull from GitHub, rebuild, preserve data)
+    if [[ "$INSTALL_MODE" == "upgrade" ]]; then
+        upgrade_application
+        exit 0
+    fi
+
     configure_ssl
     
     # Installation process
