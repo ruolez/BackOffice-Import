@@ -984,3 +984,56 @@ body {
 .animate-in-delay-3 {
     animation: fadeInUp 0.5s ease-out 0.3s both;
 }
+
+/* Invoice Copy Wizard */
+.invoice-copy-step {
+    position: relative;
+    padding: 1.5rem;
+    border-radius: 8px;
+    background: white;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--gray-200);
+}
+
+.invoice-copy-step.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+[data-theme="dark"] .invoice-copy-step {
+    background: var(--gray-100);
+    border-color: var(--gray-200);
+}
+
+[data-theme="dark"] .invoice-copy-step.active {
+    border-color: var(--primary-color);
+}
+
+.invoice-browse-table tbody tr {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.invoice-browse-table tbody tr:hover {
+    background-color: #eff6ff;
+}
+
+.invoice-browse-table tbody tr.selected {
+    background-color: #dbeafe;
+    border-left: 3px solid var(--primary-color);
+}
+
+[data-theme="dark"] .invoice-browse-table tbody tr:hover {
+    background-color: var(--gray-200);
+}
+
+[data-theme="dark"] .invoice-browse-table tbody tr.selected {
+    background-color: var(--gray-200);
+    border-left: 3px solid var(--primary-color);
+}
+
+.invoice-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}

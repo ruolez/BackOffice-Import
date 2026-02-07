@@ -187,6 +187,31 @@ class ApiService {
         });
     }
 
+    // Invoice Copy endpoints
+    async getInvoicesList(configId, page = 1, perPage = 25, search = '') {
+        let url = `/invoice-copy/invoices/${configId}?page=${page}&per_page=${perPage}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        return this.request(url);
+    }
+
+    async getInvoiceDetail(configId, invoiceId) {
+        return this.request(`/invoice-copy/invoice-detail/${configId}/${invoiceId}`);
+    }
+
+    async prepareInvoiceCopy(data) {
+        return this.request('/invoice-copy/prepare', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    }
+
+    async createCopiedInvoice(data) {
+        return this.request('/invoice-copy/create', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    }
+
     // Health check
     async healthCheck() {
         return this.request('/health');

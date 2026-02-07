@@ -514,6 +514,135 @@ class DatabaseService:
             logger.error(f"Unexpected error getting next PO number: {e}")
             return False, 1, f"Unexpected error: {str(e)}"
 
+    def get_invoices_list(self, page: int = 1, per_page: int = 25, search: str = None) -> Tuple[bool, Dict[str, Any], str]:
+        """Get paginated list of invoices with optional search by InvoiceNumber"""
+        try:
+            offset = (page - 1) * per_page
+
+            where_clause = "WHERE (Void != 1 OR Void IS NULL)"
+            params = []
+
+            if search:
+                where_clause += " AND InvoiceNumber LIKE ?"
+                params.append(f"%{search}%")
+
+            count_query = f"SELECT COUNT(*) as total FROM Invoices_tbl {where_clause}"
+
+            list_query = f"""
+            SELECT
+                InvoiceID, InvoiceNumber, InvoiceDate, BusinessName, AccountNo,
+                InvoiceTotal, NoLines
+            FROM Invoices_tbl
+            {where_clause}
+            ORDER BY InvoiceID DESC
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            """
+
+            params_list = params + [offset, per_page]
+
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(count_query, params)
+                total = cursor.fetchone()[0]
+
+                cursor.execute(list_query, params_list)
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+
+                invoices = []
+                for row in rows:
+                    invoice = dict(zip(columns, row))
+                    if invoice.get('InvoiceDate'):
+                        invoice['InvoiceDate'] = str(invoice['InvoiceDate'])
+                    invoices.append(invoice)
+
+                total_pages = (total + per_page - 1) // per_page
+
+                result = {
+                    'invoices': invoices,
+                    'pagination': {
+                        'page': page,
+                        'per_page': per_page,
+                        'total': total,
+                        'total_pages': total_pages,
+                        'has_next': page < total_pages,
+                        'has_prev': page > 1
+                    }
+                }
+
+                return True, result, f"Found {total} invoices"
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get invoices list: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting invoices list: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
+    def get_invoice_with_details(self, invoice_id: int) -> Tuple[bool, Dict[str, Any], str]:
+        """Get full invoice header and all line items"""
+        try:
+            header_query = """
+            SELECT
+                InvoiceID, InvoiceNumber, InvoiceDate, InvoiceType, InvoiceTitle,
+                CustomerID, BusinessName, AccountNo,
+                Shipto, ShipAddress1, ShipAddress2, ShipContact,
+                ShipCity, ShipState, ShipZipCode, ShipPhoneNo,
+                TermID, SalesRepID, TotQtyOrd, TotQtyShp, NoLines, TotalWeight,
+                InvoiceSubtotal, TotalTaxes, InvoiceTotal
+            FROM Invoices_tbl
+            WHERE InvoiceID = ?
+            """
+
+            details_query = """
+            SELECT
+                InvoiceDetailID, InvoiceID, CateID, SubCateID, ProductID,
+                ProductSKU, ProductUPC, ProductDescription, ItemSize,
+                UnitPrice, OriginalPrice, UnitCost, QtyOrdered, QtyShipped,
+                ExtendedPrice, ExtendedCost, ItemWeight, ItemTaxID,
+                Taxable, SPPromoted, SPPromotionDescription, LineMessage,
+                UnitDesc, UnitQty, CountInUnit
+            FROM InvoicesDetails_tbl
+            WHERE InvoiceID = ?
+            """
+
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(header_query, (invoice_id,))
+                columns = [column[0] for column in cursor.description]
+                row = cursor.fetchone()
+
+                if not row:
+                    return False, {}, f"Invoice with ID {invoice_id} not found"
+
+                invoice = dict(zip(columns, row))
+                if invoice.get('InvoiceDate'):
+                    invoice['InvoiceDate'] = str(invoice['InvoiceDate'])
+
+                cursor.execute(details_query, (invoice_id,))
+                detail_columns = [column[0] for column in cursor.description]
+                detail_rows = cursor.fetchall()
+
+                details = []
+                for detail_row in detail_rows:
+                    details.append(dict(zip(detail_columns, detail_row)))
+
+                result = {
+                    'invoice': invoice,
+                    'details': details
+                }
+
+                return True, result, f"Invoice {invoice.get('InvoiceNumber')} found with {len(details)} lines"
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get invoice details: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting invoice details: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
     def create_purchase_order(self, po_data: Dict[str, Any], po_details: List[Dict[str, Any]]) -> Tuple[bool, int, str]:
         """Create a new purchase order with details"""
         try:
