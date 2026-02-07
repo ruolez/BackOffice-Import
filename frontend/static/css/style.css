@@ -1147,8 +1147,21 @@ body {
     border-top: 1px solid var(--gray-200);
 }
 
+.ic-nav-buttons.ic-nav-top {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    padding-top: 0;
+    padding-bottom: 1rem;
+    border-top: none;
+    border-bottom: 1px solid var(--gray-200);
+}
+
 [data-theme="dark"] .ic-nav-buttons {
     border-top-color: var(--gray-300);
+}
+
+[data-theme="dark"] .ic-nav-buttons.ic-nav-top {
+    border-bottom-color: var(--gray-300);
 }
 
 @media (max-width: 768px) {

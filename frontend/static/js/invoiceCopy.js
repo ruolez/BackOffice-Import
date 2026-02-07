@@ -85,6 +85,12 @@ class InvoiceCopyManager {
 
             <!-- Step 1: Select Source Invoice -->
             <div class="invoice-copy-step active" id="ic-step1">
+                <div id="icStep1Nav" class="ic-nav-buttons ic-nav-top" style="display: none;">
+                    <div id="icSelectedInvoiceBadge"></div>
+                    <button class="btn btn-primary" id="icNextToStep2">
+                        Next <i class="fas fa-arrow-right ms-1"></i>
+                    </button>
+                </div>
                 <div class="row mb-3">
                     <div class="col-md-4">
                         <label for="icSourceDb" class="form-label">Source Database</label>
@@ -113,17 +119,16 @@ class InvoiceCopyManager {
                 <div id="icInvoicesTable">
                     <p class="text-muted">Select a source database to browse invoices.</p>
                 </div>
-                <div id="icSelectedInvoiceBadge"></div>
-                <div id="icStep1Nav" class="ic-nav-buttons" style="display: none;">
-                    <div></div>
-                    <button class="btn btn-primary" id="icNextToStep2">
-                        Next <i class="fas fa-arrow-right ms-1"></i>
-                    </button>
-                </div>
             </div>
 
             <!-- Step 2: Select Destination Database & Customer -->
             <div class="invoice-copy-step" id="ic-step2">
+                <div class="ic-nav-buttons ic-nav-top">
+                    <button class="btn btn-secondary" id="icBackToStep1">
+                        <i class="fas fa-arrow-left me-1"></i> Back
+                    </button>
+                    <div></div>
+                </div>
                 <div class="row">
                     <div class="col-md-4">
                         <label for="icDestDb" class="form-label">Destination Database</label>
@@ -151,12 +156,6 @@ class InvoiceCopyManager {
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="ic-nav-buttons">
-                    <button class="btn btn-secondary" id="icBackToStep1">
-                        <i class="fas fa-arrow-left me-1"></i> Back
-                    </button>
-                    <div></div>
                 </div>
             </div>
 
@@ -624,6 +623,14 @@ class InvoiceCopyManager {
     renderMissingUpcsOnly(missingUpcs) {
         const container = document.getElementById('icPreviewContainer');
         container.innerHTML = `
+            <div class="ic-nav-buttons ic-nav-top">
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
+                    <i class="fas fa-arrow-left me-1"></i> Back
+                </button>
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.resetWorkflow()">
+                    <i class="fas fa-undo me-1"></i> Start Over
+                </button>
+            </div>
             <div class="alert alert-danger">
                 <h6><i class="fas fa-exclamation-triangle me-2"></i>All UPCs Missing</h6>
                 <p>None of the source invoice items were found in the destination database.</p>
@@ -635,14 +642,6 @@ class InvoiceCopyManager {
                         <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${parseFloat(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
                     </div>
                 `).join('')}
-            </div>
-            <div class="ic-nav-buttons">
-                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
-                    <i class="fas fa-arrow-left me-1"></i> Back
-                </button>
-                <button class="btn btn-secondary" onclick="invoiceCopyManager.resetWorkflow()">
-                    <i class="fas fa-undo me-1"></i> Start Over
-                </button>
             </div>
         `;
     }
@@ -672,6 +671,20 @@ class InvoiceCopyManager {
         }
 
         html += `
+            <div class="ic-nav-buttons ic-nav-top">
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
+                    <i class="fas fa-arrow-left me-1"></i> Back
+                </button>
+                <div>
+                    <button class="btn btn-secondary me-2" onclick="invoiceCopyManager.resetWorkflow()">
+                        <i class="fas fa-undo me-1"></i> Start Over
+                    </button>
+                    <button class="btn btn-success btn-lg" onclick="invoiceCopyManager.createInvoice()">
+                        <i class="fas fa-check me-2"></i>Create Invoice
+                    </button>
+                </div>
+            </div>
+
             <div class="invoice-preview">
                 <div class="invoice-header">
                     <div class="row">
@@ -766,19 +779,6 @@ class InvoiceCopyManager {
                 </div>
             </div>
 
-            <div class="ic-nav-buttons">
-                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
-                    <i class="fas fa-arrow-left me-1"></i> Back
-                </button>
-                <div>
-                    <button class="btn btn-secondary me-2" onclick="invoiceCopyManager.resetWorkflow()">
-                        <i class="fas fa-undo me-1"></i> Start Over
-                    </button>
-                    <button class="btn btn-success btn-lg" onclick="invoiceCopyManager.createInvoice()">
-                        <i class="fas fa-check me-2"></i>Create Invoice
-                    </button>
-                </div>
-            </div>
         `;
 
         container.innerHTML = html;
