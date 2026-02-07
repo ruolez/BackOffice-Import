@@ -332,19 +332,17 @@ cleanup_existing() {
 setup_app_directory() {
     log "Setting up application directory..."
 
-    # Create parent directory
+    # Ensure parent directory allows creation
     sudo mkdir -p "$(dirname "$APP_DIR")"
 
-    # Clone from GitHub
-    if command -v git &> /dev/null; then
-        log "Cloning repository from GitHub..."
-        git clone "$GITHUB_REPO" "$APP_DIR"
-    else
-        # Fallback: install git then clone
+    # Install git if needed
+    if ! command -v git &> /dev/null; then
         sudo apt-get install -y git
-        git clone "$GITHUB_REPO" "$APP_DIR"
     fi
 
+    # Clone from GitHub (clone creates the target directory itself)
+    log "Cloning repository from GitHub..."
+    sudo git clone "$GITHUB_REPO" "$APP_DIR"
     sudo chown -R $USER:$USER "$APP_DIR"
 
     log "Application cloned to $APP_DIR"
