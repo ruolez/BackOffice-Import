@@ -7,6 +7,7 @@ class InvoiceCopyManager {
         this.currentPreview = null;
         this.currentPage = 1;
         this.searchTerm = '';
+        this.currentStep = 1;
         this.init();
     }
 
@@ -64,19 +65,33 @@ class InvoiceCopyManager {
         const container = document.getElementById('invoice-copy-content');
 
         const html = `
-            <!-- Step 1: Select Source Database & Browse Invoices -->
-            <div class="invoice-copy-step active" id="ic-step1">
-                <div class="invoice-step-header">
-                    <div class="invoice-step-number">1</div>
-                    <h3 class="invoice-step-title">Select Source Invoice</h3>
+            <!-- Progress Bar -->
+            <div class="ic-progress-bar">
+                <div class="ic-progress-step active" id="ic-progress-1">
+                    <div class="ic-step-circle">1</div>
+                    <span class="ic-step-label">Select Source Invoice</span>
                 </div>
+                <div class="ic-progress-line" id="ic-line-1"></div>
+                <div class="ic-progress-step" id="ic-progress-2">
+                    <div class="ic-step-circle">2</div>
+                    <span class="ic-step-label">Destination & Customer</span>
+                </div>
+                <div class="ic-progress-line" id="ic-line-2"></div>
+                <div class="ic-progress-step" id="ic-progress-3">
+                    <div class="ic-step-circle">3</div>
+                    <span class="ic-step-label">Preview & Create</span>
+                </div>
+            </div>
+
+            <!-- Step 1: Select Source Invoice -->
+            <div class="invoice-copy-step active" id="ic-step1">
                 <div class="row mb-3">
                     <div class="col-md-4">
                         <label for="icSourceDb" class="form-label">Source Database</label>
                         <select class="form-select" id="icSourceDb" required>
                             <option value="">Select source database...</option>
                             ${databaseOptions.map(db => `
-                                <option value="${db.id}">${db.name} (${db.server}/${db.database})</option>
+                                <option value="${db.id}" ${String(db.id) === String(this.sourceConfigId) ? 'selected' : ''}>${db.name} (${db.server}/${db.database})</option>
                             `).join('')}
                         </select>
                     </div>
@@ -98,24 +113,17 @@ class InvoiceCopyManager {
                 <div id="icInvoicesTable">
                     <p class="text-muted">Select a source database to browse invoices.</p>
                 </div>
+                <div id="icSelectedInvoiceBadge"></div>
+                <div id="icStep1Nav" class="ic-nav-buttons" style="display: none;">
+                    <div></div>
+                    <button class="btn btn-primary" id="icNextToStep2">
+                        Next <i class="fas fa-arrow-right ms-1"></i>
+                    </button>
+                </div>
             </div>
 
-            <!-- Step 2: Review Source Invoice -->
+            <!-- Step 2: Select Destination Database & Customer -->
             <div class="invoice-copy-step" id="ic-step2">
-                <div class="invoice-step-header">
-                    <div class="invoice-step-number">2</div>
-                    <h3 class="invoice-step-title">Review Source Invoice</h3>
-                </div>
-                <div id="icSourceInvoiceDetail">
-                </div>
-            </div>
-
-            <!-- Step 3: Select Destination Database & Customer -->
-            <div class="invoice-copy-step" id="ic-step3">
-                <div class="invoice-step-header">
-                    <div class="invoice-step-number">3</div>
-                    <h3 class="invoice-step-title">Select Destination Database & Customer</h3>
-                </div>
                 <div class="row">
                     <div class="col-md-4">
                         <label for="icDestDb" class="form-label">Destination Database</label>
@@ -144,31 +152,26 @@ class InvoiceCopyManager {
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Step 4: UPC Matching & Preview -->
-            <div class="invoice-copy-step" id="ic-step4">
-                <div class="invoice-step-header">
-                    <div class="invoice-step-number">4</div>
-                    <h3 class="invoice-step-title">UPC Matching & Preview</h3>
-                </div>
-                <div id="icPreviewContainer">
+                <div class="ic-nav-buttons">
+                    <button class="btn btn-secondary" id="icBackToStep1">
+                        <i class="fas fa-arrow-left me-1"></i> Back
+                    </button>
+                    <div></div>
                 </div>
             </div>
 
-            <!-- Step 5: Confirm & Create -->
-            <div class="invoice-copy-step" id="ic-step5">
-                <div class="invoice-step-header">
-                    <div class="invoice-step-number">5</div>
-                    <h3 class="invoice-step-title">Confirm & Create Invoice</h3>
-                </div>
-                <div id="icConfirmContainer">
-                </div>
+            <!-- Step 3: Preview & Create -->
+            <div class="invoice-copy-step" id="ic-step3">
+                <div id="icPreviewContainer"></div>
             </div>
         `;
 
         container.innerHTML = html;
         this.setupWizardEventListeners();
+
+        if (this.sourceConfigId) {
+            this.loadInvoices();
+        }
     }
 
     setupWizardEventListeners() {
@@ -181,16 +184,14 @@ class InvoiceCopyManager {
                 this.searchTerm = '';
                 const searchInput = document.getElementById('icInvoiceSearch');
                 if (searchInput) searchInput.value = '';
-                this.deactivateStep(2);
-                this.deactivateStep(3);
-                this.deactivateStep(4);
-                this.deactivateStep(5);
+                this.hideStepNav();
                 if (this.sourceConfigId) {
                     this.loadInvoices();
                 } else {
                     document.getElementById('icInvoicesTable').innerHTML =
                         '<p class="text-muted">Select a source database to browse invoices.</p>';
                 }
+                document.getElementById('icSelectedInvoiceBadge').innerHTML = '';
             });
         }
 
@@ -229,8 +230,6 @@ class InvoiceCopyManager {
             destDb.addEventListener('change', (e) => {
                 this.destConfigId = e.target.value;
                 this.selectedCustomer = null;
-                this.deactivateStep(4);
-                this.deactivateStep(5);
                 const custInfo = document.getElementById('icSelectedCustomerInfo');
                 if (custInfo) custInfo.style.display = 'none';
                 const custResults = document.getElementById('icCustomerResults');
@@ -250,6 +249,79 @@ class InvoiceCopyManager {
                 if (e.key === 'Enter') this.searchCustomers();
             });
         }
+
+        const nextToStep2 = document.getElementById('icNextToStep2');
+        if (nextToStep2) {
+            nextToStep2.addEventListener('click', () => {
+                if (!this.selectedInvoice) {
+                    authManager.showAlert('Please select an invoice first', 'warning');
+                    return;
+                }
+                this.populateDestDbDropdown();
+                this.goToStep(2);
+            });
+        }
+
+        const backToStep1 = document.getElementById('icBackToStep1');
+        if (backToStep1) {
+            backToStep1.addEventListener('click', () => {
+                this.goToStep(1);
+            });
+        }
+    }
+
+    goToStep(stepNumber) {
+        for (let i = 1; i <= 3; i++) {
+            const step = document.getElementById(`ic-step${i}`);
+            if (step) step.classList.remove('active');
+        }
+
+        const targetStep = document.getElementById(`ic-step${stepNumber}`);
+        if (targetStep) targetStep.classList.add('active');
+
+        this.currentStep = stepNumber;
+        this.updateProgressBar();
+    }
+
+    updateProgressBar() {
+        for (let i = 1; i <= 3; i++) {
+            const progressStep = document.getElementById(`ic-progress-${i}`);
+            if (!progressStep) continue;
+
+            progressStep.classList.remove('active', 'completed');
+            const circle = progressStep.querySelector('.ic-step-circle');
+
+            if (i < this.currentStep) {
+                progressStep.classList.add('completed');
+                circle.innerHTML = '<i class="fas fa-check"></i>';
+            } else if (i === this.currentStep) {
+                progressStep.classList.add('active');
+                circle.textContent = i;
+            } else {
+                circle.textContent = i;
+            }
+        }
+
+        for (let i = 1; i <= 2; i++) {
+            const line = document.getElementById(`ic-line-${i}`);
+            if (line) {
+                if (i < this.currentStep) {
+                    line.classList.add('completed');
+                } else {
+                    line.classList.remove('completed');
+                }
+            }
+        }
+    }
+
+    hideStepNav() {
+        const nav = document.getElementById('icStep1Nav');
+        if (nav) nav.style.display = 'none';
+    }
+
+    showStepNav() {
+        const nav = document.getElementById('icStep1Nav');
+        if (nav) nav.style.display = 'flex';
     }
 
     async loadInvoices() {
@@ -292,7 +364,7 @@ class InvoiceCopyManager {
                     </thead>
                     <tbody>
                         ${invoices.map(inv => `
-                            <tr class="invoice-browse-row" data-invoice-id="${inv.InvoiceID}">
+                            <tr class="invoice-browse-row ${this.selectedInvoice && this.selectedInvoice.invoice.InvoiceID === inv.InvoiceID ? 'selected' : ''}" data-invoice-id="${inv.InvoiceID}">
                                 <td><strong>${inv.InvoiceNumber || ''}</strong></td>
                                 <td>${inv.InvoiceDate ? inv.InvoiceDate.split(' ')[0] : ''}</td>
                                 <td>${inv.BusinessName || ''}</td>
@@ -361,101 +433,34 @@ class InvoiceCopyManager {
                 details: response.details
             };
 
-            this.renderSourceInvoiceDetail(response.invoice, response.details);
-            this.activateStep(2);
-
-            this.populateDestDbDropdown();
-            this.activateStep(3);
-
-            this.deactivateStep(4);
-            this.deactivateStep(5);
             this.selectedCustomer = null;
-            this.destConfigId = null;
-            const destDb = document.getElementById('icDestDb');
-            if (destDb) destDb.value = '';
-            const custInfo = document.getElementById('icSelectedCustomerInfo');
-            if (custInfo) custInfo.style.display = 'none';
+            this.currentPreview = null;
 
-            tableContainer: {
-                const rows = document.querySelectorAll('.invoice-browse-row');
-                rows.forEach(r => r.classList.remove('selected'));
-                const selected = document.querySelector(`.invoice-browse-row[data-invoice-id="${invoiceId}"]`);
-                if (selected) selected.classList.add('selected');
+            const rows = document.querySelectorAll('.invoice-browse-row');
+            rows.forEach(r => r.classList.remove('selected'));
+            const selected = document.querySelector(`.invoice-browse-row[data-invoice-id="${invoiceId}"]`);
+            if (selected) selected.classList.add('selected');
+
+            const inv = response.invoice;
+            const badgeContainer = document.getElementById('icSelectedInvoiceBadge');
+            if (badgeContainer) {
+                badgeContainer.innerHTML = `
+                    <div class="ic-selected-invoice-badge">
+                        <span class="badge-item"><strong>Invoice #${inv.InvoiceNumber || ''}</strong></span>
+                        <span class="badge-item">Customer: ${inv.BusinessName || 'N/A'}</span>
+                        <span class="badge-item">Total: <strong>$${parseFloat(inv.InvoiceTotal || 0).toFixed(2)}</strong></span>
+                        <span class="badge-item">Lines: <strong>${response.details.length}</strong></span>
+                    </div>
+                `;
             }
+
+            this.showStepNav();
 
         } catch (error) {
             authManager.showAlert('Failed to load invoice details: ' + error.message, 'danger');
         } finally {
             authManager.showLoading(false);
         }
-    }
-
-    renderSourceInvoiceDetail(invoice, details) {
-        const container = document.getElementById('icSourceInvoiceDetail');
-
-        let html = `
-            <div class="invoice-preview">
-                <div class="invoice-header">
-                    <div class="row">
-                        <div class="col-md-4">
-                            <h5>Source Invoice #${invoice.InvoiceNumber || ''}</h5>
-                            <p class="mb-1"><strong>Date:</strong> ${invoice.InvoiceDate ? invoice.InvoiceDate.split(' ')[0] : 'N/A'}</p>
-                            <p class="mb-1"><strong>Type:</strong> ${invoice.InvoiceType || 'N/A'}</p>
-                            <p class="mb-0"><strong>Lines:</strong> ${details.length}</p>
-                        </div>
-                        <div class="col-md-4">
-                            <h6 class="text-primary mb-2">Customer</h6>
-                            <p class="mb-1"><strong>${invoice.BusinessName || 'N/A'}</strong></p>
-                            <p class="mb-1">Account: ${invoice.AccountNo || 'N/A'}</p>
-                        </div>
-                        <div class="col-md-4">
-                            <h6 class="text-primary mb-2">Totals</h6>
-                            <p class="mb-1"><strong>Subtotal:</strong> $${parseFloat(invoice.InvoiceSubtotal || 0).toFixed(2)}</p>
-                            <p class="mb-1"><strong>Total:</strong> $${parseFloat(invoice.InvoiceTotal || 0).toFixed(2)}</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="table-responsive">
-                    <table class="table table-striped invoice-table">
-                        <thead>
-                            <tr>
-                                <th>UPC</th>
-                                <th>Description</th>
-                                <th>Size</th>
-                                <th>Unit Cost</th>
-                                <th>Unit Price</th>
-                                <th>Qty Ordered</th>
-                                <th>Ext Cost</th>
-                                <th>Ext Price</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${details.map(d => `
-                                <tr>
-                                    <td>${d.ProductUPC || ''}</td>
-                                    <td>${d.ProductDescription || ''}</td>
-                                    <td>${d.ItemSize || ''}</td>
-                                    <td>$${parseFloat(d.UnitCost || 0).toFixed(2)}</td>
-                                    <td>$${parseFloat(d.UnitPrice || 0).toFixed(2)}</td>
-                                    <td>${d.QtyOrdered || 0}</td>
-                                    <td>$${parseFloat(d.ExtendedCost || 0).toFixed(2)}</td>
-                                    <td>$${parseFloat(d.ExtendedPrice || 0).toFixed(2)}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="text-center mt-3">
-                    <button type="button" class="btn btn-primary" onclick="invoiceCopyManager.scrollToStep(3)">
-                        <i class="fas fa-arrow-down me-2"></i>Continue to Destination
-                    </button>
-                </div>
-            </div>
-        `;
-
-        container.innerHTML = html;
     }
 
     populateDestDbDropdown() {
@@ -467,7 +472,8 @@ class InvoiceCopyManager {
         let html = '<option value="">Select destination database...</option>';
         databaseOptions.forEach(db => {
             if (String(db.id) !== String(this.sourceConfigId)) {
-                html += `<option value="${db.id}">${db.name} (${db.server}/${db.database})</option>`;
+                const isSelected = String(db.id) === String(this.destConfigId);
+                html += `<option value="${db.id}" ${isSelected ? 'selected' : ''}>${db.name} (${db.server}/${db.database})</option>`;
             }
         });
 
@@ -599,17 +605,14 @@ class InvoiceCopyManager {
                 authManager.showAlert(response.error || 'Failed to prepare invoice copy', 'danger');
                 if (response.missing_upcs && response.missing_upcs.length > 0) {
                     this.renderMissingUpcsOnly(response.missing_upcs);
-                    this.activateStep(4);
+                    this.goToStep(3);
                 }
                 return;
             }
 
             this.currentPreview = response.preview;
             this.renderCopyPreview(response.preview, response.missing_upcs);
-            this.activateStep(4);
-
-            this.renderConfirmation(response.preview);
-            this.activateStep(5);
+            this.goToStep(3);
 
         } catch (error) {
             authManager.showAlert('Failed to prepare invoice copy: ' + error.message, 'danger');
@@ -632,6 +635,14 @@ class InvoiceCopyManager {
                         <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${parseFloat(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
                     </div>
                 `).join('')}
+            </div>
+            <div class="ic-nav-buttons">
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
+                    <i class="fas fa-arrow-left me-1"></i> Back
+                </button>
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.resetWorkflow()">
+                    <i class="fas fa-undo me-1"></i> Start Over
+                </button>
             </div>
         `;
     }
@@ -754,30 +765,23 @@ class InvoiceCopyManager {
                     </div>
                 </div>
             </div>
+
+            <div class="ic-nav-buttons">
+                <button class="btn btn-secondary" onclick="invoiceCopyManager.goToStep(2)">
+                    <i class="fas fa-arrow-left me-1"></i> Back
+                </button>
+                <div>
+                    <button class="btn btn-secondary me-2" onclick="invoiceCopyManager.resetWorkflow()">
+                        <i class="fas fa-undo me-1"></i> Start Over
+                    </button>
+                    <button class="btn btn-success btn-lg" onclick="invoiceCopyManager.createInvoice()">
+                        <i class="fas fa-check me-2"></i>Create Invoice
+                    </button>
+                </div>
+            </div>
         `;
 
         container.innerHTML = html;
-    }
-
-    renderConfirmation(preview) {
-        const container = document.getElementById('icConfirmContainer');
-
-        container.innerHTML = `
-            <div class="text-center py-3">
-                <p class="mb-3">
-                    Ready to create <strong>Invoice #${preview.invoice_number}</strong>
-                    with <strong>${preview.summary.total_items} items</strong>
-                    totaling <strong>$${parseFloat(preview.summary.final_total || 0).toFixed(2)}</strong>
-                    in the destination database.
-                </p>
-                <button type="button" class="btn btn-success btn-lg" onclick="invoiceCopyManager.createInvoice()">
-                    <i class="fas fa-check me-2"></i>Create Invoice
-                </button>
-                <button type="button" class="btn btn-secondary btn-lg ms-2" onclick="invoiceCopyManager.resetWorkflow()">
-                    <i class="fas fa-undo me-2"></i>Start Over
-                </button>
-            </div>
-        `;
     }
 
     async createInvoice() {
@@ -835,15 +839,15 @@ class InvoiceCopyManager {
     }
 
     resetWorkflow() {
-        this.sourceConfigId = null;
-        this.destConfigId = null;
         this.selectedInvoice = null;
         this.selectedCustomer = null;
         this.currentPreview = null;
         this.currentPage = 1;
         this.searchTerm = '';
+        this.currentStep = 1;
 
-        this.initializeCopyWizard();
+        const databaseOptions = databaseManager.getDatabaseOptions();
+        this.renderWizardSteps(databaseOptions);
     }
 
     activateStep(stepNumber) {
@@ -854,11 +858,6 @@ class InvoiceCopyManager {
     deactivateStep(stepNumber) {
         const step = document.getElementById(`ic-step${stepNumber}`);
         if (step) step.classList.remove('active');
-    }
-
-    scrollToStep(stepNumber) {
-        const step = document.getElementById(`ic-step${stepNumber}`);
-        if (step) step.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 

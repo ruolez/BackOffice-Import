@@ -987,17 +987,15 @@ body {
 
 /* Invoice Copy Wizard */
 .invoice-copy-step {
-    position: relative;
+    display: none;
     padding: 1.5rem;
     border-radius: 8px;
     background: white;
-    margin-bottom: 1.5rem;
     border: 1px solid var(--gray-200);
 }
 
 .invoice-copy-step.active {
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    display: block;
 }
 
 [data-theme="dark"] .invoice-copy-step {
@@ -1005,8 +1003,169 @@ body {
     border-color: var(--gray-200);
 }
 
-[data-theme="dark"] .invoice-copy-step.active {
+/* Invoice Copy Progress Bar */
+.ic-progress-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem 1rem;
+    margin-bottom: 1.5rem;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid var(--gray-200);
+}
+
+[data-theme="dark"] .ic-progress-bar {
+    background: var(--gray-100);
+    border-color: var(--gray-200);
+}
+
+.ic-progress-step {
+    display: flex;
+    align-items: center;
+    cursor: default;
+}
+
+.ic-progress-step .ic-step-circle {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.875rem;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+    background: var(--gray-200);
+    color: var(--gray-500);
+    border: 2px solid var(--gray-300);
+}
+
+.ic-progress-step.active .ic-step-circle {
+    background: var(--primary-color);
+    color: white;
     border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.ic-progress-step.completed .ic-step-circle {
+    background: var(--success-color);
+    color: white;
+    border-color: var(--success-color);
+}
+
+.ic-progress-step .ic-step-label {
+    margin-left: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--gray-400);
+    white-space: nowrap;
+}
+
+.ic-progress-step.active .ic-step-label {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.ic-progress-step.completed .ic-step-label {
+    color: var(--success-color);
+}
+
+[data-theme="dark"] .ic-progress-step .ic-step-circle {
+    background: var(--gray-200);
+    border-color: var(--gray-300);
+    color: var(--gray-400);
+}
+
+[data-theme="dark"] .ic-progress-step.active .ic-step-circle {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+[data-theme="dark"] .ic-progress-step.completed .ic-step-circle {
+    background: var(--success-color);
+    color: white;
+    border-color: var(--success-color);
+}
+
+.ic-progress-line {
+    width: 60px;
+    height: 2px;
+    background: var(--gray-300);
+    margin: 0 0.75rem;
+    flex-shrink: 0;
+    transition: background 0.2s ease;
+}
+
+.ic-progress-line.completed {
+    background: var(--success-color);
+}
+
+[data-theme="dark"] .ic-progress-line {
+    background: var(--gray-300);
+}
+
+/* Selected Invoice Badge */
+.ic-selected-invoice-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 0.75rem 1.25rem;
+    margin-top: 1rem;
+}
+
+.ic-selected-invoice-badge .badge-item {
+    font-size: 0.875rem;
+    color: var(--gray-700);
+}
+
+.ic-selected-invoice-badge .badge-item strong {
+    color: var(--primary-color);
+}
+
+[data-theme="dark"] .ic-selected-invoice-badge {
+    background: var(--gray-200);
+    border-color: var(--gray-300);
+}
+
+[data-theme="dark"] .ic-selected-invoice-badge .badge-item {
+    color: var(--gray-700);
+}
+
+/* Navigation buttons */
+.ic-nav-buttons {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--gray-200);
+}
+
+[data-theme="dark"] .ic-nav-buttons {
+    border-top-color: var(--gray-300);
+}
+
+@media (max-width: 768px) {
+    .ic-progress-bar {
+        padding: 1rem 0.5rem;
+    }
+    .ic-progress-step .ic-step-label {
+        display: none;
+    }
+    .ic-progress-line {
+        width: 30px;
+    }
+    .ic-selected-invoice-badge {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
 }
 
 .invoice-browse-table tbody tr {
