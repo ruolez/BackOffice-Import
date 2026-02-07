@@ -297,7 +297,7 @@ class InvoiceCopyManager {
                                 <td>${inv.InvoiceDate ? inv.InvoiceDate.split(' ')[0] : ''}</td>
                                 <td>${inv.BusinessName || ''}</td>
                                 <td>${inv.AccountNo || ''}</td>
-                                <td>$${(inv.InvoiceTotal || 0).toFixed(2)}</td>
+                                <td>$${parseFloat(inv.InvoiceTotal || 0).toFixed(2)}</td>
                                 <td>${inv.NoLines || 0}</td>
                             </tr>
                         `).join('')}
@@ -410,8 +410,8 @@ class InvoiceCopyManager {
                         </div>
                         <div class="col-md-4">
                             <h6 class="text-primary mb-2">Totals</h6>
-                            <p class="mb-1"><strong>Subtotal:</strong> $${(invoice.InvoiceSubtotal || 0).toFixed(2)}</p>
-                            <p class="mb-1"><strong>Total:</strong> $${(invoice.InvoiceTotal || 0).toFixed(2)}</p>
+                            <p class="mb-1"><strong>Subtotal:</strong> $${parseFloat(invoice.InvoiceSubtotal || 0).toFixed(2)}</p>
+                            <p class="mb-1"><strong>Total:</strong> $${parseFloat(invoice.InvoiceTotal || 0).toFixed(2)}</p>
                         </div>
                     </div>
                 </div>
@@ -436,11 +436,11 @@ class InvoiceCopyManager {
                                     <td>${d.ProductUPC || ''}</td>
                                     <td>${d.ProductDescription || ''}</td>
                                     <td>${d.ItemSize || ''}</td>
-                                    <td>$${(d.UnitCost || 0).toFixed(2)}</td>
-                                    <td>$${(d.UnitPrice || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(d.UnitCost || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(d.UnitPrice || 0).toFixed(2)}</td>
                                     <td>${d.QtyOrdered || 0}</td>
-                                    <td>$${(d.ExtendedCost || 0).toFixed(2)}</td>
-                                    <td>$${(d.ExtendedPrice || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(d.ExtendedCost || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(d.ExtendedPrice || 0).toFixed(2)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -629,7 +629,7 @@ class InvoiceCopyManager {
                 <h6><i class="fas fa-exclamation-triangle me-2"></i>Missing UPCs (${missingUpcs.length})</h6>
                 ${missingUpcs.map(upc => `
                     <div class="missing-upc-item">
-                        <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
+                        <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${parseFloat(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
                     </div>
                 `).join('')}
             </div>
@@ -648,7 +648,7 @@ class InvoiceCopyManager {
                     <p class="mb-2">The following UPCs were not found in the destination database:</p>
                     ${missingUpcs.map(upc => `
                         <div class="missing-upc-item">
-                            <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
+                            <strong>UPC ${upc.upc}:</strong> ${upc.description || 'N/A'} (Price: $${parseFloat(upc.unit_price || 0).toFixed(2)}, QTY: ${upc.qty || 0})
                         </div>
                     `).join('')}
                     <p class="mt-2 mb-0">
@@ -705,11 +705,11 @@ class InvoiceCopyManager {
                                     <td>${line.ProductUPC}</td>
                                     <td>${line.ProductDescription || 'N/A'}</td>
                                     <td>${line.ItemSize || 'N/A'}</td>
-                                    <td>$${(line.UnitCost || 0).toFixed(2)}</td>
-                                    <td>$${(line.UnitPrice || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(line.UnitCost || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(line.UnitPrice || 0).toFixed(2)}</td>
                                     <td>${line.QtyOrdered || 0}</td>
-                                    <td>$${(line.ExtendedCost || 0).toFixed(2)}</td>
-                                    <td>$${(line.ExtendedPrice || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(line.ExtendedCost || 0).toFixed(2)}</td>
+                                    <td>$${parseFloat(line.ExtendedPrice || 0).toFixed(2)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -731,23 +731,23 @@ class InvoiceCopyManager {
                                 </tr>
                                 <tr>
                                     <td><strong>Total Weight:</strong></td>
-                                    <td class="text-end">${preview.summary.total_weight.toFixed(2)} lbs</td>
+                                    <td class="text-end">${parseFloat(preview.summary.total_weight || 0).toFixed(2)} lbs</td>
                                 </tr>
                                 <tr>
                                     <td><strong>Total Cost:</strong></td>
-                                    <td class="text-end">$${preview.summary.total_cost.toFixed(2)}</td>
+                                    <td class="text-end">$${parseFloat(preview.summary.total_cost || 0).toFixed(2)}</td>
                                 </tr>
                                 <tr>
                                     <td><strong>Subtotal:</strong></td>
-                                    <td class="text-end">$${preview.summary.total_price.toFixed(2)}</td>
+                                    <td class="text-end">$${parseFloat(preview.summary.total_price || 0).toFixed(2)}</td>
                                 </tr>
                                 <tr>
                                     <td><strong>Taxes:</strong></td>
-                                    <td class="text-end">$${preview.summary.total_taxes.toFixed(2)}</td>
+                                    <td class="text-end">$${parseFloat(preview.summary.total_taxes || 0).toFixed(2)}</td>
                                 </tr>
                                 <tr class="invoice-total">
                                     <td><strong>Total:</strong></td>
-                                    <td class="text-end">$${preview.summary.final_total.toFixed(2)}</td>
+                                    <td class="text-end">$${parseFloat(preview.summary.final_total || 0).toFixed(2)}</td>
                                 </tr>
                             </table>
                         </div>
@@ -767,7 +767,7 @@ class InvoiceCopyManager {
                 <p class="mb-3">
                     Ready to create <strong>Invoice #${preview.invoice_number}</strong>
                     with <strong>${preview.summary.total_items} items</strong>
-                    totaling <strong>$${preview.summary.final_total.toFixed(2)}</strong>
+                    totaling <strong>$${parseFloat(preview.summary.final_total || 0).toFixed(2)}</strong>
                     in the destination database.
                 </p>
                 <button type="button" class="btn btn-success btn-lg" onclick="invoiceCopyManager.createInvoice()">
