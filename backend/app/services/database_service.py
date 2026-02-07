@@ -597,12 +597,12 @@ class DatabaseService:
 
             details_query = """
             SELECT
-                InvoiceDetailID, InvoiceID, CateID, SubCateID, ProductID,
+                InvoiceID, CateID, SubCateID, ProductID,
                 ProductSKU, ProductUPC, ProductDescription, ItemSize,
                 UnitPrice, OriginalPrice, UnitCost, QtyOrdered, QtyShipped,
                 ExtendedPrice, ExtendedCost, ItemWeight, ItemTaxID,
                 Taxable, SPPromoted, SPPromotionDescription, LineMessage,
-                UnitDesc, UnitQty, CountInUnit
+                UnitDesc, UnitQty
             FROM InvoicesDetails_tbl
             WHERE InvoiceID = ?
             """
