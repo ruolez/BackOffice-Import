@@ -140,6 +140,196 @@ class DatabaseService:
             logger.error(f"Unexpected error during items query: {e}")
             return False, [], f"Unexpected error: {str(e)}"
     
+    def get_full_items_by_upcs(self, upcs: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Get all columns from Items_tbl (except ProductID) for given UPCs"""
+        try:
+            if not upcs:
+                return True, [], "No UPCs provided"
+
+            placeholders = ','.join(['?' for _ in upcs])
+
+            query = f"""
+            SELECT
+                CateID, SubCateID, ProductSKU, ProductUPC, ProductDescription,
+                ExtDescription, ProductType, ValuationMethod, ItemTaxID,
+                UnitPrice, UnitPriceA, UnitPriceB, UnitPriceC, MSRPrice,
+                AvrCost, LastCost, UnitCost,
+                ReorderLevel, ReorderQuant, QuantOnHand, QuantOnOrder,
+                PromotionID, ManuID, ManuProductID,
+                SPPromoted, SPPromotionDescription, SPPromotionCode,
+                StLocationID, Discontinued,
+                UnitID, UnitID2, UnitID3, UnitID4,
+                UnitQty2, UnitQty3, UnitQty4,
+                UnitPrice2, UnitPriceA2, UnitPriceB2, UnitPriceC2,
+                UnitPrice3, UnitPriceA3, UnitPriceB3, UnitPriceC3,
+                UnitPrice4, UnitPriceA4, UnitPriceB4, UnitPriceC4,
+                CountInUnit, ItemSize, ItemWeight,
+                BarcodeFormat, ExpDate, ProductMessage, Notes
+            FROM Items_tbl
+            WHERE ProductUPC IN ({placeholders})
+            """
+
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, upcs)
+
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+
+                items = []
+                for row in rows:
+                    items.append(dict(zip(columns, row)))
+
+                return True, items, f"Found {len(items)} full item records"
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get full items by UPCs: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting full items: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
+
+    def insert_items(self, items: List[Dict[str, Any]]) -> Tuple[bool, int, str]:
+        """Insert item records into Items_tbl, skipping UPCs that already exist"""
+        try:
+            if not items:
+                return True, 0, "No items to insert"
+
+            upcs_to_insert = [str(item.get('ProductUPC', '')) for item in items if item.get('ProductUPC')]
+            if not upcs_to_insert:
+                return True, 0, "No valid UPCs to insert"
+
+            with pyodbc.connect(self.connection_string, timeout=60) as conn:
+                cursor = conn.cursor()
+                conn.autocommit = False
+
+                try:
+                    placeholders = ','.join(['?' for _ in upcs_to_insert])
+                    cursor.execute(
+                        f"SELECT ProductUPC FROM Items_tbl WHERE ProductUPC IN ({placeholders})",
+                        upcs_to_insert
+                    )
+                    existing = {row[0] for row in cursor.fetchall()}
+
+                    new_items = [item for item in items if str(item.get('ProductUPC', '')) not in existing]
+                    if not new_items:
+                        conn.commit()
+                        return True, 0, "All items already exist in destination"
+
+                    insert_query = """
+                    INSERT INTO Items_tbl (
+                        CateID, SubCateID, ProductSKU, ProductUPC, ProductDescription,
+                        ExtDescription, ProductType, ValuationMethod, ItemTaxID,
+                        UnitPrice, UnitPriceA, UnitPriceB, UnitPriceC, MSRPrice,
+                        AvrCost, LastCost, UnitCost,
+                        LastReceived, LastSold,
+                        ReorderLevel, ReorderQuant, QuantOnHand, QuantOnOrder,
+                        PromotionID, ManuID, ManuProductID,
+                        SPPromoted, SPPromotionDescription, SPPromotionCode,
+                        StLocationID, Discontinued,
+                        UnitID, UnitID2, UnitID3, UnitID4,
+                        UnitQty2, UnitQty3, UnitQty4,
+                        UnitPrice2, UnitPriceA2, UnitPriceB2, UnitPriceC2,
+                        UnitPrice3, UnitPriceA3, UnitPriceB3, UnitPriceC3,
+                        UnitPrice4, UnitPriceA4, UnitPriceB4, UnitPriceC4,
+                        CountInUnit, ItemSize, ItemWeight,
+                        LastCountDate, BarcodeFormat, ExpDate, ProductMessage, Notes
+                    ) VALUES (
+                        ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        NULL, NULL,
+                        ?, ?, 0, 0,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        NULL, ?, ?, ?, ?
+                    )
+                    """
+
+                    inserted = 0
+                    for item in new_items:
+                        sp = item.get('SPPromoted')
+                        sp_val = 1 if sp and sp not in [0, False] else 0
+
+                        cursor.execute(insert_query, (
+                            self._safe_int_for_db(item.get('CateID')),
+                            self._safe_int_for_db(item.get('SubCateID')),
+                            self._safe_string_for_db(item.get('ProductSKU')),
+                            self._safe_string_for_db(item.get('ProductUPC')),
+                            self._safe_string_for_db(item.get('ProductDescription')),
+                            self._safe_string_for_db(item.get('ExtDescription')),
+                            self._safe_int_for_db(item.get('ProductType')),
+                            self._safe_int_for_db(item.get('ValuationMethod')),
+                            self._safe_int_for_db(item.get('ItemTaxID')),
+                            self._safe_float_for_db(item.get('UnitPrice')),
+                            self._safe_float_for_db(item.get('UnitPriceA')),
+                            self._safe_float_for_db(item.get('UnitPriceB')),
+                            self._safe_float_for_db(item.get('UnitPriceC')),
+                            self._safe_float_for_db(item.get('MSRPrice')),
+                            self._safe_float_for_db(item.get('AvrCost')),
+                            self._safe_float_for_db(item.get('LastCost')),
+                            self._safe_float_for_db(item.get('UnitCost')),
+                            self._safe_int_for_db(item.get('ReorderLevel')),
+                            self._safe_int_for_db(item.get('ReorderQuant')),
+                            self._safe_int_for_db(item.get('PromotionID')),
+                            self._safe_int_for_db(item.get('ManuID')),
+                            self._safe_string_for_db(item.get('ManuProductID')),
+                            sp_val,
+                            self._safe_string_for_db(item.get('SPPromotionDescription')),
+                            self._safe_string_for_db(item.get('SPPromotionCode')),
+                            self._safe_int_for_db(item.get('StLocationID')),
+                            1 if item.get('Discontinued') else 0,
+                            self._safe_int_for_db(item.get('UnitID')),
+                            self._safe_int_for_db(item.get('UnitID2')),
+                            self._safe_int_for_db(item.get('UnitID3')),
+                            self._safe_int_for_db(item.get('UnitID4')),
+                            self._safe_float_for_db(item.get('UnitQty2')),
+                            self._safe_float_for_db(item.get('UnitQty3')),
+                            self._safe_float_for_db(item.get('UnitQty4')),
+                            self._safe_float_for_db(item.get('UnitPrice2')),
+                            self._safe_float_for_db(item.get('UnitPriceA2')),
+                            self._safe_float_for_db(item.get('UnitPriceB2')),
+                            self._safe_float_for_db(item.get('UnitPriceC2')),
+                            self._safe_float_for_db(item.get('UnitPrice3')),
+                            self._safe_float_for_db(item.get('UnitPriceA3')),
+                            self._safe_float_for_db(item.get('UnitPriceB3')),
+                            self._safe_float_for_db(item.get('UnitPriceC3')),
+                            self._safe_float_for_db(item.get('UnitPrice4')),
+                            self._safe_float_for_db(item.get('UnitPriceA4')),
+                            self._safe_float_for_db(item.get('UnitPriceB4')),
+                            self._safe_float_for_db(item.get('UnitPriceC4')),
+                            self._safe_int_for_db(item.get('CountInUnit')),
+                            self._safe_string_for_db(item.get('ItemSize')),
+                            self._safe_string_for_db(item.get('ItemWeight')),
+                            self._safe_int_for_db(item.get('BarcodeFormat')),
+                            item.get('ExpDate'),
+                            self._safe_string_for_db(item.get('ProductMessage')),
+                            self._safe_string_for_db(item.get('Notes')),
+                        ))
+                        inserted += 1
+
+                    conn.commit()
+                    return True, inserted, f"Inserted {inserted} item(s) into destination"
+
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to insert items: {e}")
+            return False, 0, f"Database error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error inserting items: {e}")
+            return False, 0, f"Unexpected error: {str(e)}"
+
     def get_next_invoice_number(self) -> Tuple[bool, int, str]:
         """Get the next invoice number by incrementing the highest existing number"""
         try:

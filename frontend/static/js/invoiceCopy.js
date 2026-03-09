@@ -610,7 +610,7 @@ class InvoiceCopyManager {
             }
 
             this.currentPreview = response.preview;
-            this.renderCopyPreview(response.preview, response.missing_upcs);
+            this.renderCopyPreview(response.preview, response.missing_upcs, response.auto_inserted_count || 0);
             this.goToStep(3);
 
         } catch (error) {
@@ -646,10 +646,19 @@ class InvoiceCopyManager {
         `;
     }
 
-    renderCopyPreview(preview, missingUpcs) {
+    renderCopyPreview(preview, missingUpcs, autoInsertedCount = 0) {
         const container = document.getElementById('icPreviewContainer');
 
         let html = '';
+
+        if (autoInsertedCount > 0) {
+            html += `
+                <div class="alert alert-info mb-3">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>${autoInsertedCount}</strong> product(s) were automatically added to the destination database.
+                </div>
+            `;
+        }
 
         if (missingUpcs && missingUpcs.length > 0) {
             html += `

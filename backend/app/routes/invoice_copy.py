@@ -120,6 +120,24 @@ def prepare_copy():
         if not success:
             return jsonify({'error': f'Failed to look up items in destination: {message}'}), 500
 
+        auto_inserted_count = 0
+        found_upcs = {str(item.get('ProductUPC', '')) for item in dest_items}
+        missing_upcs = [upc for upc in upcs if upc not in found_upcs]
+
+        if missing_upcs:
+            src_success, source_items, src_msg = source_db.get_full_items_by_upcs(missing_upcs)
+            if src_success and source_items:
+                ins_success, ins_count, ins_msg = dest_db.insert_items(source_items)
+                if ins_success and ins_count > 0:
+                    auto_inserted_count = ins_count
+                    current_app.logger.info(f"Auto-inserted {ins_count} product(s) into destination")
+                elif not ins_success:
+                    current_app.logger.warning(f"Failed to auto-insert products: {ins_msg}")
+
+                success, dest_items, message = dest_db.get_items_by_upcs(upcs)
+                if not success:
+                    return jsonify({'error': f'Failed to re-query items in destination: {message}'}), 500
+
         success, customer_data, message = dest_db.get_customer_by_id(int(customer_id))
         if not success:
             return jsonify({'error': f'Customer not found in destination: {message}'}), 404
@@ -145,6 +163,7 @@ def prepare_copy():
             'success': True,
             'preview': preview,
             'missing_upcs': missing_upcs,
+            'auto_inserted_count': auto_inserted_count,
             'customer': {
                 'id': customer_data['CustomerID'],
                 'account_no': customer_data['AccountNo'],
