@@ -189,6 +189,18 @@ const utils = {
         URL.revokeObjectURL(url);
     },
 
+    // Download an existing Blob (e.g. a binary file fetched from the API) as a file
+    downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
+
     // Escape HTML
     escapeHtml(unsafe) {
         return unsafe

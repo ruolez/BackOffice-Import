@@ -833,6 +833,132 @@ class DatabaseService:
             logger.error(f"Unexpected error getting invoice details: {e}")
             return False, {}, f"Unexpected error: {str(e)}"
 
+    def get_purchase_orders_list(self, page: int = 1, per_page: int = 25, search: str = None) -> Tuple[bool, Dict[str, Any], str]:
+        """Get paginated list of purchase orders with optional search by PoNumber"""
+        try:
+            offset = (page - 1) * per_page
+
+            where_clause = "WHERE 1 = 1"
+            params = []
+
+            if search:
+                where_clause += " AND PoNumber LIKE ?"
+                params.append(f"%{search}%")
+
+            count_query = f"SELECT COUNT(*) as total FROM PurchaseOrders_tbl {where_clause}"
+
+            list_query = f"""
+            SELECT
+                PoID, PoNumber, PoDate, BusinessName, AccountNo,
+                PoTotal, NoLines
+            FROM PurchaseOrders_tbl
+            {where_clause}
+            ORDER BY PoID DESC
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            """
+
+            params_list = params + [offset, per_page]
+
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(count_query, params)
+                total = cursor.fetchone()[0]
+
+                cursor.execute(list_query, params_list)
+                columns = [column[0] for column in cursor.description]
+                rows = cursor.fetchall()
+
+                purchase_orders = []
+                for row in rows:
+                    po = dict(zip(columns, row))
+                    if po.get('PoDate'):
+                        po['PoDate'] = str(po['PoDate'])
+                    purchase_orders.append(po)
+
+                total_pages = (total + per_page - 1) // per_page
+
+                result = {
+                    'purchase_orders': purchase_orders,
+                    'pagination': {
+                        'page': page,
+                        'per_page': per_page,
+                        'total': total,
+                        'total_pages': total_pages,
+                        'has_next': page < total_pages,
+                        'has_prev': page > 1
+                    }
+                }
+
+                return True, result, f"Found {total} purchase orders"
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get purchase orders list: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting purchase orders list: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
+    def get_purchase_order_with_details(self, po_id: int) -> Tuple[bool, Dict[str, Any], str]:
+        """Get full purchase order header and all line items"""
+        try:
+            header_query = """
+            SELECT
+                PoID, PoNumber, PoDate, PoTitle, Status,
+                SupplierID, BusinessName, AccountNo,
+                Shipto, ShipAddress1, ShipAddress2, ShipContact,
+                ShipCity, ShipState, ShipZipCode, ShipPhoneNo,
+                TermID, PoTotal, NoLines, TotQtyOrd, TotQtyRcv
+            FROM PurchaseOrders_tbl
+            WHERE PoID = ?
+            """
+
+            details_query = """
+            SELECT
+                PoID, ProductID, CateID, SubCateID,
+                ProductSKU, ProductUPC, SupplierSKU, ProductDescription, ItemSize,
+                UnitDesc, UnitQty, QtyOrdered, QtyReceived,
+                UnitCost, ExtendedCost, ItemWeight
+            FROM PurchaseOrdersDetails_tbl
+            WHERE PoID = ?
+            """
+
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(header_query, (po_id,))
+                columns = [column[0] for column in cursor.description]
+                row = cursor.fetchone()
+
+                if not row:
+                    return False, {}, f"Purchase order with ID {po_id} not found"
+
+                purchase_order = dict(zip(columns, row))
+                if purchase_order.get('PoDate'):
+                    purchase_order['PoDate'] = str(purchase_order['PoDate'])
+
+                cursor.execute(details_query, (po_id,))
+                detail_columns = [column[0] for column in cursor.description]
+                detail_rows = cursor.fetchall()
+
+                details = []
+                for detail_row in detail_rows:
+                    details.append(dict(zip(detail_columns, detail_row)))
+
+                result = {
+                    'purchase_order': purchase_order,
+                    'details': details
+                }
+
+                return True, result, f"Purchase order {purchase_order.get('PoNumber')} found with {len(details)} lines"
+
+        except pyodbc.Error as e:
+            logger.error(f"Failed to get purchase order details: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error getting purchase order details: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
     def create_purchase_order(self, po_data: Dict[str, Any], po_details: List[Dict[str, Any]]) -> Tuple[bool, int, str]:
         """Create a new purchase order with details"""
         try:

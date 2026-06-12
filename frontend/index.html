@@ -128,6 +128,11 @@
                                             Copy Invoice
                                         </button>
                                     </li>
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link" id="export-tab" data-bs-toggle="tab" data-bs-target="#export" type="button" role="tab">
+                                            Export Data
+                                        </button>
+                                    </li>
                                 </ul>
                             </div>
                             <div class="card-body">
@@ -165,6 +170,13 @@
                                     <!-- Invoice Copy Tab -->
                                     <div class="tab-pane fade" id="invoice-copy" role="tabpanel">
                                         <div id="invoice-copy-content">
+                                            <!-- Will be populated by JavaScript -->
+                                        </div>
+                                    </div>
+
+                                    <!-- Export Data Tab -->
+                                    <div class="tab-pane fade" id="export" role="tabpanel">
+                                        <div id="export-content">
                                             <!-- Will be populated by JavaScript -->
                                         </div>
                                     </div>
@@ -296,6 +308,7 @@
     <script src="static/js/invoice.js"></script>
     <script src="static/js/purchaseOrder.js"></script>
     <script src="static/js/invoiceCopy.js"></script>
+    <script src="static/js/export.js"></script>
     <script src="static/js/app.js"></script>
 </body>
 </html>

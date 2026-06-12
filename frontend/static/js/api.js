@@ -212,6 +212,39 @@ class ApiService {
         });
     }
 
+    // Export endpoints
+    async getExportInvoicesList(configId, page = 1, perPage = 25, search = '') {
+        let url = `/export/invoices/${configId}?page=${page}&per_page=${perPage}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        return this.request(url);
+    }
+
+    async getExportPurchaseOrdersList(configId, page = 1, perPage = 25, search = '') {
+        let url = `/export/purchase-orders/${configId}?page=${page}&per_page=${perPage}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        return this.request(url);
+    }
+
+    async exportInvoiceExcel(configId, invoiceId) {
+        return this.requestBlob(`/export/invoice/${configId}/${invoiceId}`);
+    }
+
+    async exportPurchaseOrderExcel(configId, poId) {
+        return this.requestBlob(`/export/purchase-order/${configId}/${poId}`);
+    }
+
+    // Fetch a binary file response as a Blob (the standard request() assumes JSON)
+    async requestBlob(endpoint) {
+        const response = await fetch(`${this.baseUrl}${endpoint}`, {
+            credentials: 'include'
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+        return await response.blob();
+    }
+
     // Health check
     async healthCheck() {
         return this.request('/health');
