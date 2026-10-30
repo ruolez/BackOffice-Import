@@ -9,11 +9,10 @@ class ThemeManager {
         // Apply stored theme on page load
         this.applyTheme(this.currentTheme);
         
-        // Set up theme toggle button
-        const themeToggle = document.getElementById('themeToggle');
-        if (themeToggle) {
-            themeToggle.addEventListener('click', () => this.toggleTheme());
-        }
+        // Set up theme toggle buttons (sidebar + sign-in screen)
+        document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+            btn.addEventListener('click', () => this.toggleTheme());
+        });
 
         // Listen for system theme changes
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
@@ -34,14 +33,13 @@ class ThemeManager {
     applyTheme(theme) {
         const root = document.documentElement;
         
-        if (theme === 'dark') {
-            root.setAttribute('data-theme', 'dark');
-        } else if (theme === 'light') {
-            root.setAttribute('data-theme', 'light');
-        } else if (theme === 'auto') {
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+        let resolved = theme;
+        if (theme === 'auto') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
+        // data-bs-theme lets Bootstrap's own components (tables, dropdowns, modals) follow the theme
+        root.setAttribute('data-theme', resolved);
+        root.setAttribute('data-bs-theme', resolved);
 
         this.currentTheme = theme;
         this.setStoredTheme(theme);
@@ -57,29 +55,20 @@ class ThemeManager {
     }
 
     updateThemeToggle() {
-        const themeToggle = document.getElementById('themeToggle');
-        if (!themeToggle) return;
-
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        themeToggle.setAttribute('aria-label', `Switch to ${isDark ? 'light' : 'dark'} theme`);
+        document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+            btn.setAttribute('aria-label', `Switch to ${isDark ? 'light' : 'dark'} theme`);
+            btn.setAttribute('title', `Switch to ${isDark ? 'light' : 'dark'} theme`);
+        });
     }
 
     animateThemeChange() {
-        // Add a ripple effect when changing themes
         const body = document.body;
-        body.style.transition = 'background-color 0.3s ease, color 0.3s ease';
-        
+        body.style.transition = 'background-color 0.2s ease, color 0.2s ease';
+
         setTimeout(() => {
             body.style.transition = '';
-        }, 300);
-
-        // Animate cards with stagger effect
-        const cards = document.querySelectorAll('.card, .magic-card');
-        cards.forEach((card, index) => {
-            card.style.animation = 'none';
-            card.offsetHeight; // Trigger reflow
-            card.style.animation = `fadeInUp 0.3s ease-out ${index * 0.05}s both`;
-        });
+        }, 200);
     }
 
     // Method to manually set theme (useful for settings panel)

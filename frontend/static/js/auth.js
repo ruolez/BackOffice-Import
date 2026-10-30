@@ -47,7 +47,8 @@ class AuthManager {
 
         // Logout handler
         document.addEventListener('click', async (e) => {
-            if (e.target.id === 'logoutBtn') {
+            if (e.target.closest('#logoutBtn')) {
+                e.preventDefault();
                 await this.handleLogout();
             }
         });
@@ -171,14 +172,17 @@ class AuthManager {
         if (!navbarUser) return;
 
         if (this.isAuthenticated && this.currentUser) {
+            const name = String(this.currentUser.username || '')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             navbarUser.innerHTML = `
-                <div class="dropdown">
-                    <a class="nav-link dropdown-toggle text-white" href="#" role="button" data-bs-toggle="dropdown">
-                        <i class="fas fa-user me-2"></i>${this.currentUser.username}
-                    </a>
+                <div class="dropup">
+                    <button class="user-chip dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <span class="user-avatar">${name.charAt(0).toUpperCase()}</span>
+                        <span class="user-name">${name}</span>
+                    </button>
                     <ul class="dropdown-menu">
                         <li><a class="dropdown-item" href="#" id="logoutBtn">
-                            <i class="fas fa-sign-out-alt me-2"></i>Logout
+                            <i class="fas fa-arrow-right-from-bracket me-2"></i>Sign out
                         </a></li>
                     </ul>
                 </div>
@@ -192,11 +196,18 @@ class AuthManager {
         const alertContainer = document.getElementById('alert-container');
         if (!alertContainer) return;
 
-        const alertId = 'alert-' + Date.now();
+        const alertId = 'alert-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+        const icons = {
+            success: 'fa-circle-check',
+            danger: 'fa-circle-exclamation',
+            warning: 'fa-triangle-exclamation',
+            info: 'fa-circle-info'
+        };
         const alertHtml = `
-            <div class="alert alert-${type} alert-dismissible fade show" role="alert" id="${alertId}">
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            <div class="alert alert-${type} alert-dismissible fade show toast-alert" role="alert" id="${alertId}">
+                <i class="fas ${icons[type] || icons.info} toast-icon"></i>
+                <div class="toast-message">${message}</div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         `;
 

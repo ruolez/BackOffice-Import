@@ -41,14 +41,7 @@ class ExportManager {
         const container = document.getElementById('export-content');
 
         container.innerHTML = `
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h5 class="mb-0">Export Data</h5>
-                    <p class="text-muted mb-0 small">Download a saved invoice or purchase order as an Excel file (UPC, QTY, Cost, Description) that can be re-imported.</p>
-                </div>
-            </div>
-
-            <div class="row mb-3">
+            <div class="row g-3 mb-3 filter-bar">
                 <div class="col-md-4">
                     <label for="exportDb" class="form-label">Database</label>
                     <select class="form-select" id="exportDb" required>

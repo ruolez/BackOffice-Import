@@ -61,68 +61,53 @@ class DatabaseManager {
 
         if (this.databases.length === 0) {
             container.innerHTML = `
-                <div class="text-center py-5 animate-in">
-                    <div class="floating">
-                        <i class="fas fa-database fa-3x text-muted mb-3"></i>
-                    </div>
-                    <h5 class="text-muted">No database configurations found</h5>
-                    <p class="text-muted">Click "Add Database" to create your first configuration</p>
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i class="fas fa-database"></i></div>
+                    <h5>No database configurations yet</h5>
+                    <p>Click "Add Database" to create your first configuration</p>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#databaseModal">
+                        <i class="fas fa-plus me-2"></i>Add Database
+                    </button>
                 </div>
             `;
             return;
         }
 
-        const html = this.databases.map((config, index) => `
-            <div class="card magic-card database-card mb-3 animate-in-delay-${Math.min(index, 3)}">
-                <div class="card-body">
-                    <div class="row align-items-center">
-                        <div class="col-md-8">
-                            <h5 class="card-title mb-1">
-                                <i class="fas fa-database me-2"></i>${config.name}
-                            </h5>
-                            <p class="card-text text-muted mb-2">
-                                <i class="fas fa-server me-2"></i>${config.server}:${config.port}
-                                <i class="fas fa-table ms-3 me-2"></i>${config.database}
-                            </p>
-                            <div class="d-flex align-items-center">
+        const html = this.databases.map(config => `
+            <div class="col">
+                <div class="card database-card h-100">
+                    <div class="card-body">
+                        <div class="database-card-head">
+                            <div class="database-icon"><i class="fas fa-database"></i></div>
+                            <div class="flex-grow-1 min-w-0">
+                                <h5 class="card-title text-truncate" title="${config.name}">${config.name}</h5>
                                 <span class="database-status ${config.is_active ? 'active' : 'inactive'}">
                                     ${config.is_active ? 'Active' : 'Inactive'}
                                 </span>
-                                ${config.last_tested ? `
-                                    <small class="text-muted ms-3">
-                                        <i class="fas fa-clock me-1"></i>
-                                        Last tested: ${new Date(config.last_tested).toLocaleDateString()}
-                                    </small>
-                                ` : ''}
                             </div>
                         </div>
-                        <div class="col-md-4 text-end">
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-info" onclick="databaseManager.testConnection(${config.id})" title="Test Connection">
-                                    <i class="fas fa-plug me-1"></i>Test
-                                </button>
-                                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#databaseModal" data-config-id="${config.id}" title="Edit Configuration">
-                                    <i class="fas fa-edit me-1"></i>Edit
-                                </button>
-                                <button class="btn btn-sm btn-outline-danger" onclick="databaseManager.deleteConfig(${config.id})" title="Delete Configuration">
-                                    <i class="fas fa-trash me-1"></i>Delete
-                                </button>
-                            </div>
-                        </div>
+                        <dl class="database-meta">
+                            <div><dt><i class="fas fa-server"></i>Server</dt><dd class="text-truncate">${config.server}:${config.port}</dd></div>
+                            <div><dt><i class="fas fa-table"></i>Database</dt><dd class="text-truncate">${config.database}</dd></div>
+                            <div><dt><i class="fas fa-clock"></i>Last tested</dt><dd>${config.last_tested ? new Date(config.last_tested).toLocaleDateString() : 'Never'}</dd></div>
+                        </dl>
+                    </div>
+                    <div class="card-footer database-actions">
+                        <button class="btn btn-sm btn-light" onclick="databaseManager.testConnection(${config.id})" title="Test Connection">
+                            <i class="fas fa-plug me-1"></i>Test
+                        </button>
+                        <button class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#databaseModal" data-config-id="${config.id}" title="Edit Configuration">
+                            <i class="fas fa-pen me-1"></i>Edit
+                        </button>
+                        <button class="btn btn-sm btn-light btn-danger-subtle ms-auto" onclick="databaseManager.deleteConfig(${config.id})" title="Delete Configuration">
+                            <i class="fas fa-trash me-1"></i>Delete
+                        </button>
                     </div>
                 </div>
             </div>
         `).join('');
 
-        container.innerHTML = html;
-        
-        // Trigger animations for database cards
-        setTimeout(() => {
-            const cards = container.querySelectorAll('.database-card');
-            if (window.AnimationUtils) {
-                window.AnimationUtils.animateIn(cards, 100);
-            }
-        }, 50);
+        container.innerHTML = `<div class="row row-cols-1 row-cols-md-2 row-cols-xxl-3 g-3">${html}</div>`;
     }
 
     async handleSave() {
