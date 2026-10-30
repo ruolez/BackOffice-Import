@@ -63,12 +63,17 @@ The `install-production.sh` script provides a comprehensive, automated solution 
 
 ### 4. Upgrade
 ```bash
-./install-production.sh
-# Select option 4
+backoffice-maintenance update        # runs the latest installer's upgrade
+# or: ./install-production.sh --upgrade   (or select option 4)
 ```
-- Preserves data while updating application
-- Rebuilds containers with latest code
-- Maintains production configuration
+- **Recommended way to update a running server**
+- Backs up the SQLite database and production configs first (backend paused for a few seconds); aborts if the backup fails
+- Pulls the latest code from GitHub, keeping `.env`, `docker-compose.yml`, `nginx-production.conf` and `ssl/`
+- Builds new images while the current version keeps serving, then restarts on them
+- Waits for `/api/health`; if the new version doesn't come up, rolls back to the previous version automatically
+- Versions the frontend CSS/JS URLs so browsers load the new UI on their next page load
+- Removes dangling images left by the rebuild and unused build cache (other images on the server are untouched)
+- Keeps the newest 10 backups
 
 ## SSL Configuration Options
 
@@ -191,7 +196,9 @@ backoffice-maintenance restart    # Restart services
 backoffice-maintenance status     # Check status
 backoffice-maintenance logs       # View logs
 backoffice-maintenance backup     # Create backup
-backoffice-maintenance update     # Update containers
+backoffice-maintenance restore <backup-dir>   # Restore the database from a backup
+backoffice-maintenance update     # Upgrade (backup, update, rebuild, health check, cleanup)
+backoffice-maintenance cleanup    # Remove dangling Docker images and build cache
 ```
 
 ### Manual Docker Management
@@ -218,37 +225,34 @@ docker-compose up -d
 ## Backup and Restore
 
 ### Automatic Backups
-- Created automatically during preserve/upgrade modes
+- Created automatically during preserve, cleanup and upgrade modes (newest 10 kept)
 - Stored in `/opt/backoffice-backups/`
 - Includes SQLite database and configuration files
 - Timestamped for easy identification
 
 ### Manual Backup
 ```bash
-# Create backup using maintenance script
+# Create backup using maintenance script (database + configs)
 backoffice-maintenance backup
 
-# Manual backup
+# Fully manual (the volume is named <project>_sqlite_data, normally backoffice-invoice_sqlite_data)
 cd /opt/backoffice-invoice
-mkdir -p /opt/backoffice-backups/manual-$(date +%Y%m%d-%H%M%S)
-cp docker-compose.yml .env /opt/backoffice-backups/manual-$(date +%Y%m%d-%H%M%S)/
-docker run --rm -v sqlite_data:/data -v /opt/backoffice-backups/manual-$(date +%Y%m%d-%H%M%S):/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
+BACKUP=/opt/backoffice-backups/manual-$(date +%Y%m%d-%H%M%S)
+mkdir -p "$BACKUP" && cp docker-compose.yml .env nginx-production.conf "$BACKUP"/
+docker compose stop backend
+docker run --rm -v backoffice-invoice_sqlite_data:/data:ro -v "$BACKUP":/backup alpine tar czf /backup/sqlite_data.tar.gz -C /data .
+docker compose start backend
 ```
 
 ### Restore from Backup
 ```bash
-# Stop services
-docker-compose down
+# List backups, then restore one (asks for confirmation; backend paused during restore)
+ls /opt/backoffice-backups/
+backoffice-maintenance restore /opt/backoffice-backups/backup-TIMESTAMP
 
-# Restore database
-docker run --rm -v sqlite_data:/data -v /opt/backoffice-backups/backup-TIMESTAMP:/backup alpine tar xzf /backup/sqlite_data.tar.gz -C /data
-
-# Restore configuration
-cp /opt/backoffice-backups/backup-TIMESTAMP/docker-compose.yml .
-cp /opt/backoffice-backups/backup-TIMESTAMP/.env .
-
-# Restart services
-docker-compose up -d
+# Restore configuration too, if needed
+cp /opt/backoffice-backups/backup-TIMESTAMP/{docker-compose.yml,.env,nginx-production.conf} /opt/backoffice-invoice/
+cd /opt/backoffice-invoice && docker compose up -d --force-recreate
 ```
 
 ## Access Information
