@@ -326,6 +326,46 @@ class ApiService {
         return this.requestBlob(`/batch/runs/${runId}/log.txt`);
     }
 
+    // Sales presets
+    async getSalesPresets() {
+        return this.request('/batch/presets');
+    }
+
+    async saveSalesPreset(preset) {
+        return this.request(preset.id ? `/batch/presets/${preset.id}` : '/batch/presets', {
+            method: preset.id ? 'PUT' : 'POST',
+            body: JSON.stringify(preset)
+        });
+    }
+
+    async deleteSalesPreset(presetId) {
+        return this.request(`/batch/presets/${presetId}`, { method: 'DELETE' });
+    }
+
+    async testSalesPreset(preset) {
+        return this.request('/batch/presets/test', { method: 'POST', body: JSON.stringify(preset) });
+    }
+
+    async getSourceCategories(configId) {
+        return this.request(`/batch/sources/${configId}/categories`);
+    }
+
+    async searchSourceItems(configId, term) {
+        return this.request(`/batch/sources/${configId}/items?q=${encodeURIComponent(term)}`);
+    }
+
+    async addBatchSales(runId, presetId) {
+        return this.request(`/batch/runs/${runId}/sales`, { method: 'POST', body: JSON.stringify({ preset_id: presetId }) });
+    }
+
+    async repullBatchSales(runId, fileId) {
+        return this.request(`/batch/runs/${runId}/files/${fileId}/pull`, { method: 'POST' });
+    }
+
+    async downloadBatchFileRows(runId, fileId) {
+        return this.requestBlob(`/batch/runs/${runId}/files/${fileId}/rows.xlsx`);
+    }
+
     async requestBlob(endpoint) {
         const response = await fetch(`${this.baseUrl}${endpoint}`, {
             credentials: 'include'

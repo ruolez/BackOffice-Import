@@ -733,6 +733,87 @@ class DatabaseService:
             logger.error(f"Unexpected error during document lookup: {e}")
             return False, [], f"Unexpected error: {str(e)}"
 
+    def get_category_tree(self) -> Tuple[bool, Dict[str, Any], str]:
+        """Categories and their subcategories, for choosing what a sales preset pulls"""
+        try:
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT SubCateID, SubCateName, CategoryID FROM SubCategories_tbl")
+                subcategories = [{'id': int(r.SubCateID), 'name': r.SubCateName or f'Subcategory {r.SubCateID}',
+                                  'category_id': int(r.CategoryID) if r.CategoryID is not None else None}
+                                 for r in cursor.fetchall()]
+
+                categories = []
+                try:
+                    cursor.execute("SELECT * FROM Categories_tbl")
+                    columns = [c[0] for c in cursor.description]
+                    lower = {c.lower(): c for c in columns}
+                    id_col = lower.get('categoryid') or lower.get('cateid') or columns[0]
+                    name_col = next((lower[n] for n in ('categoryname', 'catename', 'category', 'name', 'description')
+                                     if n in lower), None)
+                    for row in cursor.fetchall():
+                        record = dict(zip(columns, row))
+                        if record.get(id_col) is None:
+                            continue
+                        categories.append({'id': int(record[id_col]),
+                                           'name': str(record.get(name_col) or f'Category {record[id_col]}')})
+                except pyodbc.Error as e:
+                    logger.warning(f"Categories_tbl not readable, grouping by CategoryID only: {e}")
+
+                known = {c['id'] for c in categories}
+                for category_id in sorted({s['category_id'] for s in subcategories if s['category_id'] is not None} - known):
+                    categories.append({'id': category_id, 'name': f'Category {category_id}'})
+                return True, {'categories': categories, 'subcategories': subcategories}, "Categories loaded"
+        except pyodbc.Error as e:
+            logger.error(f"Category lookup failed: {e}")
+            return False, {}, f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error loading categories: {e}")
+            return False, {}, f"Unexpected error: {str(e)}"
+
+    def search_items(self, term: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Products whose UPC or description contains the term"""
+        return self.execute_query("""
+            SELECT TOP 30 ProductUPC, ProductDescription
+            FROM Items_tbl
+            WHERE ProductUPC LIKE ? OR ProductDescription LIKE ?
+            ORDER BY ProductDescription
+        """, [f'%{term}%', f'%{term}%'])
+
+    def get_sales_lines(self, start, end, subcategory_ids: List[int], exclude_accounts: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Non-voided invoice lines of [start, end) in the subcategories, grouped by UPC and unit cost"""
+        if not subcategory_ids:
+            return True, [], "No subcategories selected"
+        sub_marks = ','.join('?' for _ in subcategory_ids)
+        account_filter = f"AND ISNULL(i.AccountNo, '') NOT IN ({','.join('?' for _ in exclude_accounts)})" if exclude_accounts else ''
+        return self.execute_query(f"""
+            SELECT d.ProductUPC AS upc, MAX(d.ProductDescription) AS description, d.UnitCost AS cost,
+                   SUM(d.QtyShipped) AS qty, MAX(i.InvoiceDate) AS last_sale, COUNT(*) AS line_count
+            FROM InvoicesDetails_tbl d
+            JOIN Invoices_tbl i ON i.InvoiceID = d.InvoiceID
+            WHERE i.InvoiceDate >= ? AND i.InvoiceDate < ?
+              AND ISNULL(i.Void, 0) = 0 AND ISNULL(d.Void, 0) = 0
+              AND d.SubCateID IN ({sub_marks})
+              {account_filter}
+            GROUP BY d.ProductUPC, d.UnitCost
+        """, [start, end, *subcategory_ids, *exclude_accounts])
+
+    def get_credit_lines(self, start, end, subcategory_ids: List[int], exclude_accounts: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Credit memo quantities of [start, end) in the subcategories, grouped by UPC"""
+        if not subcategory_ids:
+            return True, [], "No subcategories selected"
+        sub_marks = ','.join('?' for _ in subcategory_ids)
+        account_filter = f"AND ISNULL(c.AccountNo, '') NOT IN ({','.join('?' for _ in exclude_accounts)})" if exclude_accounts else ''
+        return self.execute_query(f"""
+            SELECT d.ProductUPC AS upc, MAX(d.ProductDescription) AS description, SUM(d.Quantity) AS qty
+            FROM CreditMemosDetails_tbl d
+            JOIN CreditMemos_tbl c ON c.CmemoID = d.CmemoID
+            WHERE c.CmemoDate >= ? AND c.CmemoDate < ?
+              AND d.SubCateID IN ({sub_marks})
+              {account_filter}
+            GROUP BY d.ProductUPC
+        """, [start, end, *subcategory_ids, *exclude_accounts])
+
     def get_invoices_list(self, page: int = 1, per_page: int = 25, search: str = None) -> Tuple[bool, Dict[str, Any], str]:
         """Get paginated list of invoices with optional search by InvoiceNumber"""
         try:

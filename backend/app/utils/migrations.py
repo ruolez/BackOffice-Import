@@ -107,6 +107,12 @@ def add_batch_run_columns():
             ('cancel_requested', 'BOOLEAN DEFAULT 0'),
             ('notice', 'TEXT'),
         ],
+        'batch_run_files': [
+            ('source_type', "VARCHAR(20) DEFAULT 'excel'"),
+            ('preset_id', 'INTEGER'),
+            ('period', 'VARCHAR(7)'),
+            ('source_json', 'TEXT'),
+        ],
         'batch_run_steps': [
             ('attempted_number', 'VARCHAR(50)'),
             ('attempted_total', 'FLOAT'),

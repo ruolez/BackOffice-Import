@@ -99,6 +99,11 @@ class BatchRunFile(db.Model):
     rows_json = db.Column(db.Text, nullable=False, default='[]')
     error = db.Column(db.Text)
     warnings_json = db.Column(db.Text, default='[]')
+    # 'excel' (uploaded file) or 'sales' (pulled from a store database with a sales preset)
+    source_type = db.Column(db.String(20), default='excel')
+    preset_id = db.Column(db.Integer)
+    period = db.Column(db.String(7))  # YYYY-MM of the pulled sales
+    source_json = db.Column(db.Text)  # what the pull found: counts, exclusions, credit memo notes
 
     steps = db.relationship('BatchRunStep', backref='run_file', lazy=True, cascade='all, delete-orphan',
                             order_by='BatchRunStep.position')
@@ -144,3 +149,23 @@ class BatchLog(db.Model):
     message = db.Column(db.Text, nullable=False)
     details = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class SalesPreset(db.Model):
+    """Which sales of a store database to turn into documents: subcategories, exclusions and a default rule.
+    The period is always the previous calendar month."""
+    __tablename__ = 'sales_presets'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    source_config_id = db.Column(db.Integer, nullable=False)
+    rule_id = db.Column(db.Integer)
+    subcategory_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    # Every subcategory that existed when the preset was saved, to spot new ones later
+    known_subcategory_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    exclude_upcs_json = db.Column(db.Text, nullable=False, default='[]')
+    exclude_words_json = db.Column(db.Text, nullable=False, default='[]')
+    exclude_accounts_json = db.Column(db.Text, nullable=False, default='[]')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

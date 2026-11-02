@@ -168,6 +168,9 @@ def _excel_document(step_type: str, db_service, rows: List[Dict[str, Any]], part
         raise StepError(message)
 
     ok, document, missing, message = processor.process_excel_data(rows, items, party)
+    descriptions = {row.get('row_number'): row.get('description') for row in rows if row.get('description')}
+    for entry in missing:
+        entry.setdefault('description', descriptions.get(entry.get('row_number')))
     if not ok:
         raise StepError(message, {'missing_upcs': missing})
     return document, missing
@@ -720,6 +723,10 @@ def serialize_run(run: BatchRun, include_files: bool = True, include_logs: bool 
             'row_count': len(json.loads(f.rows_json or '[]')),
             'error': f.error,
             'warnings': json.loads(f.warnings_json or '[]'),
+            'source_type': f.source_type or 'excel',
+            'preset_id': f.preset_id,
+            'period': f.period,
+            'source': json.loads(f.source_json) if f.source_json else None,
             'steps': [{
                 'id': s.id,
                 'key': s.step_key,

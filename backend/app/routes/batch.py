@@ -10,7 +10,10 @@ from flask_login import login_required, current_user
 from sqlalchemy import func
 from werkzeug.utils import secure_filename
 
-from app.models import db, BatchRule, BatchRun, BatchRunFile, BatchRunStep
+from app.models import db, BatchRule, BatchRun, BatchRunFile, BatchRunStep, DatabaseConfig, SalesPreset
+from app.services.database_service import DatabaseService
+from app.services import sales_service as sales
+from app.services.export_service import build_export_excel
 from app.services.excel_service import ExcelService
 from app.services import batch_service as batch
 from app.services.batch_report import build_run_report, build_report_excel
@@ -173,17 +176,17 @@ def cancel_run(run_id):
     return jsonify({'success': True, 'run': batch.serialize_run(run)}), 200
 
 
-def _duplicate_warnings(run, sha256):
+def _duplicate_warnings(run, sha256, what='file'):
     warnings = []
     if any(f.sha256 == sha256 for f in run.files):
-        warnings.append('The same file was already added to this run')
+        warnings.append(f'The same {what} was already added to this run')
     earlier = (BatchRunFile.query.join(BatchRun)
                .filter(BatchRun.user_id == current_user.id, BatchRun.id != run.id, BatchRunFile.sha256 == sha256)
                .order_by(BatchRun.id.desc()).all())
     for other in earlier:
         if any(s.status == 'success' for s in other.steps):
             when = (other.run.started_at or other.run.created_at).strftime('%Y-%m-%d')
-            warnings.append(f'This exact file was already processed in run #{other.run.id} on {when}')
+            warnings.append(f'This exact {what} was already processed in run #{other.run.id} on {when}')
             break
     return warnings
 
@@ -374,3 +377,227 @@ def execute_run(run_id):
     threading.Thread(target=work, name=f'batch-run-{run_id}', daemon=True).start()
     run = _run_or_404(run_id)
     return jsonify({'success': True, 'run': batch.serialize_run(run)}), 202
+
+
+# ---------- Sales presets ----------
+
+def _preset_or_404(preset_id):
+    return SalesPreset.query.filter_by(id=preset_id, user_id=current_user.id).first()
+
+
+def _config_or_404(config_id):
+    return DatabaseConfig.query.filter_by(id=config_id, user_id=current_user.id).first()
+
+
+def _preset_payload():
+    preset = sales.clean_preset(request.get_json() or {})
+    rule_ids = {r.id for r in BatchRule.query.filter_by(user_id=current_user.id).all()}
+    errors = sales.validate_preset(preset, set(batch.user_configs(current_user.id)), rule_ids)
+    return preset, errors
+
+
+@bp.route('/presets', methods=['GET'])
+@login_required
+def list_presets():
+    presets = SalesPreset.query.filter_by(user_id=current_user.id).order_by(SalesPreset.name).all()
+    return jsonify({'success': True, 'presets': [sales.serialize_preset(p) for p in presets],
+                    'period': sales.previous_month(datetime.now().date()),
+                    'period_label': sales.month_label(sales.previous_month(datetime.now().date()))}), 200
+
+
+@bp.route('/presets', methods=['POST'])
+@login_required
+def create_preset():
+    preset, errors = _preset_payload()
+    if errors:
+        return jsonify({'error': '; '.join(errors), 'errors': errors}), 400
+    model = SalesPreset(user_id=current_user.id)
+    sales.apply_preset(model, preset)
+    db.session.add(model)
+    db.session.commit()
+    return jsonify({'success': True, 'preset': sales.serialize_preset(model)}), 201
+
+
+@bp.route('/presets/<int:preset_id>', methods=['PUT'])
+@login_required
+def update_preset(preset_id):
+    model = _preset_or_404(preset_id)
+    if not model:
+        return jsonify({'error': 'Preset not found'}), 404
+    preset, errors = _preset_payload()
+    if errors:
+        return jsonify({'error': '; '.join(errors), 'errors': errors}), 400
+    sales.apply_preset(model, preset)
+    db.session.commit()
+    return jsonify({'success': True, 'preset': sales.serialize_preset(model)}), 200
+
+
+@bp.route('/presets/<int:preset_id>', methods=['DELETE'])
+@login_required
+def delete_preset(preset_id):
+    model = _preset_or_404(preset_id)
+    if not model:
+        return jsonify({'error': 'Preset not found'}), 404
+    db.session.delete(model)
+    db.session.commit()
+    return jsonify({'success': True}), 200
+
+
+@bp.route('/presets/test', methods=['POST'])
+@login_required
+def test_preset():
+    """Pull the previous month with unsaved preset settings, so the user can see what it would give"""
+    preset, errors = _preset_payload()
+    errors = [e for e in errors if e != 'Preset name is required']
+    if errors:
+        return jsonify({'error': '; '.join(errors), 'errors': errors}), 400
+    model = SalesPreset(user_id=current_user.id)
+    sales.apply_preset(model, preset)
+    period = sales.previous_month(datetime.now().date())
+    try:
+        rows, summary = sales.pull_preset(model, period, DatabaseService(_config_or_404(preset['source_config_id'])))
+    except sales.PullError as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'success': True, 'rows': rows[:200], 'summary': summary}), 200
+
+
+@bp.route('/sources/<int:config_id>/categories', methods=['GET'])
+@login_required
+def source_categories(config_id):
+    config = _config_or_404(config_id)
+    if not config:
+        return jsonify({'error': 'Database configuration not found'}), 404
+    ok, tree, message = DatabaseService(config).get_category_tree()
+    if not ok:
+        return jsonify({'error': message}), 502
+    return jsonify({'success': True, **tree}), 200
+
+
+@bp.route('/sources/<int:config_id>/items', methods=['GET'])
+@login_required
+def source_items(config_id):
+    config = _config_or_404(config_id)
+    if not config:
+        return jsonify({'error': 'Database configuration not found'}), 404
+    term = (request.args.get('q') or '').strip()
+    if len(term) < 2:
+        return jsonify({'success': True, 'items': []}), 200
+    ok, items, message = DatabaseService(config).search_items(term)
+    if not ok:
+        return jsonify({'error': message}), 502
+    return jsonify({'success': True, 'items': items}), 200
+
+
+def _fill_sales_file(run, run_file, preset, period):
+    """Pull the preset's sales into the file and preview it with the preset's rule"""
+    config = _config_or_404(preset.source_config_id)
+    run_file.error = None
+    if config is None:
+        run_file.error = 'The store database of this preset no longer exists'
+        return
+    try:
+        rows, summary = sales.pull_preset(preset, period, DatabaseService(config))
+    except sales.PullError as e:
+        run_file.error = str(e)
+        batch.add_log(run, 'error', f'{run_file.filename}: could not pull sales: {e}', run_file=run_file)
+        return
+    summary['source_db'] = config.name
+    summary['preset_name'] = preset.name
+    run_file.rows_json = json.dumps(rows, default=str)
+    run_file.source_json = json.dumps(summary, default=str)
+    if not rows:
+        run_file.error = (f'No sales left to create for {summary["period_label"]} after the preset filters '
+                          f'and credit memos')
+    batch.add_log(run, 'info' if rows else 'warning',
+                  f'{run_file.filename}: pulled {summary["sale_lines"]} sale line(s) from {config.name}, '
+                  f'{len(rows)} row(s) after filters and credit memos', run_file=run_file,
+                  details={k: summary[k] for k in ('excluded_by_upc', 'excluded_by_word', 'credits_applied',
+                                                   'credits_without_sales', 'dropped', 'new_subcategories')})
+    for note in summary['notes']:
+        batch.add_log(run, 'warning', f'{run_file.filename}: {note}', run_file=run_file)
+
+
+@bp.route('/runs/<int:run_id>/sales', methods=['POST'])
+@login_required
+def add_sales_source(run_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    if run.status != 'draft':
+        return jsonify({'error': 'Sales can only be added before the run starts'}), 409
+    preset = _preset_or_404((request.get_json() or {}).get('preset_id'))
+    if not preset:
+        return jsonify({'error': 'Preset not found'}), 404
+
+    period = sales.previous_month(datetime.now().date())
+    key = hashlib.sha256(f'sales:{preset.id}:{period}'.encode()).hexdigest()
+    run_file = BatchRunFile(
+        run_id=run.id,
+        position=len(run.files),
+        filename=f'{preset.name} · {sales.month_label(period)} sales',
+        sha256=key,
+        source_type='sales',
+        preset_id=preset.id,
+        period=period,
+        warnings_json=json.dumps(_duplicate_warnings(run, key, 'sales preset and month')),
+    )
+    run.files.append(run_file)
+    db.session.flush()
+
+    _fill_sales_file(run, run_file, preset, period)
+    rule = _rule_or_404(preset.rule_id) if preset.rule_id else None
+    if not run_file.error and rule:
+        batch.plan_file(run_file, rule, batch.user_configs(current_user.id))
+    db.session.commit()
+    return jsonify({'success': True, 'run': batch.serialize_run(run)}), 201
+
+
+@bp.route('/runs/<int:run_id>/files/<int:file_id>/pull', methods=['POST'])
+@login_required
+def repull_sales_source(run_id, file_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    if run.status not in batch.EXECUTABLE_RUN_STATUSES:
+        return jsonify({'error': 'The run is in progress'}), 409
+    run_file = BatchRunFile.query.filter_by(id=file_id, run_id=run.id, source_type='sales').first()
+    if not run_file:
+        return jsonify({'error': 'Sales source not found'}), 404
+    if any(s.status in ('success', 'running', 'interrupted') for s in run_file.steps):
+        return jsonify({'error': 'Documents were already created from these sales, so they cannot be pulled again'}), 409
+    preset = _preset_or_404(run_file.preset_id)
+    if not preset:
+        return jsonify({'error': 'The preset of these sales was deleted'}), 404
+
+    choices = {s.step_key: s.status for s in run_file.steps
+               if s.status == 'held' or (s.status == 'excluded' and 'error' not in json.loads(s.preview_json or '{}'))}
+    _fill_sales_file(run, run_file, preset, run_file.period)
+    if run_file.error:
+        for old in list(run_file.steps):
+            run_file.steps.remove(old)
+    else:
+        rule = _rule_or_404(run_file.rule_id or preset.rule_id) if (run_file.rule_id or preset.rule_id) else None
+        if rule:
+            batch.plan_file(run_file, rule, batch.user_configs(current_user.id))
+            for step in run_file.steps:
+                if step.status == 'pending' and step.step_key in choices:
+                    step.status = choices[step.step_key]
+    db.session.commit()
+    return jsonify({'success': True, 'run': batch.serialize_run(run)}), 200
+
+
+@bp.route('/runs/<int:run_id>/files/<int:file_id>/rows.xlsx', methods=['GET'])
+@login_required
+def download_file_rows(run_id, file_id):
+    """The rows a run file feeds the documents with, as an Excel file the Create Invoice / PO screens can import"""
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    run_file = BatchRunFile.query.filter_by(id=file_id, run_id=run.id).first()
+    if not run_file:
+        return jsonify({'error': 'File not found'}), 404
+    rows = [{'UPC': r['UPC'], 'QTY': r['QTY'], 'Cost': r['Cost'], 'Description': r.get('description', '')}
+            for r in json.loads(run_file.rows_json or '[]')]
+    name = secure_filename(run_file.filename.rsplit('.', 1)[0]) or f'file-{run_file.id}'
+    return send_file(build_export_excel(rows), as_attachment=True, download_name=f'{name}.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

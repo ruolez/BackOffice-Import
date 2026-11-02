@@ -48,6 +48,7 @@ function runSteps(run) {
 // Renders a run's files and steps. Used by Monthly Run (editable) and Run History (read only).
 // editable: files and rules can be changed (draft only). interactive: steps can be ticked, held and re-checked.
 function renderBatchFiles(run, { editable, interactive = false, rules }) {
+    const rowsAllowed = interactive;
     const canToggle = interactive && EXECUTABLE_RUNS.includes(run.status);
     return run.files.map(file => {
         const ruleControl = editable
@@ -60,23 +61,35 @@ function renderBatchFiles(run, { editable, interactive = false, rules }) {
         const warnings = (file.warnings || []).map(w =>
             `<div class="batch-note batch-note-warning"><i class="fas fa-triangle-exclamation"></i>${esc(w)}</div>`).join('');
         const error = file.error
-            ? `<div class="batch-note batch-note-danger"><i class="fas fa-circle-xmark"></i>Could not read this file: ${esc(file.error)}</div>` : '';
+            ? `<div class="batch-note batch-note-danger"><i class="fas fa-circle-xmark"></i>${file.source_type === 'sales' ? '' : 'Could not read this file: '}${esc(file.error)}</div>` : '';
+        const isSales = file.source_type === 'sales';
         const noRule = !file.error && !file.rule_id
-            ? `<div class="batch-note"><i class="fas fa-circle-info"></i>No rule matched this file name. Choose one to see what will be created.</div>` : '';
+            ? `<div class="batch-note"><i class="fas fa-circle-info"></i>${isSales
+                ? 'The preset has no default rule. Choose one to see what will be created.'
+                : 'No rule matched this file name. Choose one to see what will be created.'}</div>` : '';
+        const created = file.steps.some(s => ['success', 'running', 'interrupted'].includes(s.status));
+        const salesActions = isSales && canToggle && !created
+            ? `<button class="btn btn-sm btn-outline-secondary batch-repull" data-file-id="${file.id}" title="Read the store's sales again"><i class="fas fa-cloud-arrow-down me-1"></i>Pull again</button>` : '';
+        const rowsDownload = file.row_count && rowsAllowed
+            ? `<button class="icon-btn batch-file-rows" data-file-id="${file.id}" title="Download these lines as Excel" aria-label="Download lines"><i class="fas fa-file-arrow-down"></i></button>` : '';
+        const subtitle = file.error ? (isSales ? 'Not pulled' : 'Not readable')
+            : isSales && file.source ? `${esc(file.source.source_db || '')} · ${file.row_count} line(s)` : `${file.row_count} row(s)`;
 
         return `
             <div class="card batch-file">
                 <div class="batch-file-head">
-                    <div class="batch-file-icon"><i class="fas fa-file-excel"></i></div>
+                    <div class="batch-file-icon ${isSales ? 'is-sales' : ''}"><i class="fas ${isSales ? 'fa-store' : 'fa-file-excel'}"></i></div>
                     <div class="batch-file-title">
                         <div class="batch-file-name">${esc(file.filename)}</div>
-                        <div class="text-muted small">${file.error ? 'Not readable' : `${file.row_count} row(s)`}</div>
+                        <div class="text-muted small">${subtitle}</div>
                     </div>
                     <div class="batch-file-rule">${ruleControl}</div>
+                    ${salesActions}
+                    ${rowsDownload}
                     ${canToggle && file.steps.length ? `<button class="btn btn-sm btn-outline-secondary batch-recheck-file" data-file-id="${file.id}" title="Check this file against the databases again"><i class="fas fa-rotate-right me-1"></i>Re-check</button>` : ''}
                     ${editable ? `<button class="icon-btn batch-remove-file" data-file-id="${file.id}" title="Remove file" aria-label="Remove file"><i class="fas fa-trash"></i></button>` : ''}
                 </div>
-                ${error}${warnings}${noRule}
+                ${error}${warnings}${file.source_type === 'sales' && file.source && !file.error ? `<div class="batch-sales-summary">${renderSalesSummary(file.source)}</div>` : ''}${noRule}
                 ${file.steps.length ? renderBatchSteps(file, canToggle && !file.error) : ''}
             </div>`;
     }).join('');
@@ -104,7 +117,7 @@ function renderBatchSteps(file, canToggle) {
                 <details class="batch-issue">
                     <summary class="text-warning">${p.missing_upcs.length} UPC(s) not found, lines skipped</summary>
                     <ul class="batch-upc-list">${p.missing_upcs.map(m =>
-                        `<li><code>${esc(m.upc)}</code>${m.row ? ` row ${m.row}` : ''}${m.qty != null ? ` · qty ${esc(m.qty)}` : ''}${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}
+                        `<li><code>${esc(m.upc)}</code>${m.row && !m.description ? ` row ${m.row}` : ''}${m.qty != null ? ` · qty ${esc(m.qty)}` : ''}${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}
                     </ul>
                 </details>`);
         }
@@ -561,6 +574,10 @@ class MonthlyRunManager {
                 <p>or click to choose. Several .xlsx / .xls files at once. Each file is matched to a rule by its name.</p>
                 <input type="file" id="batchFileInput" accept=".xlsx,.xls" multiple hidden>
             </div>
+            <div class="batch-sales-add mb-3">
+                <button type="button" class="btn btn-outline-primary" id="batchAddSalesBtn"><i class="fas fa-store me-2"></i>Add from sales</button>
+                <span class="text-muted small">Pull a store's sales of last month with a sales preset</span>
+            </div>
             ${this.uploading ? `<div class="batch-progress mb-3"><span class="spinner-border spinner-border-sm me-2"></span>${esc(this.uploading)}</div>` : ''}` : '';
 
         const notice = run?.notice ? `
@@ -676,6 +693,17 @@ class MonthlyRunManager {
         document.querySelectorAll('.batch-recheck-file').forEach(btn => btn.addEventListener('click', () =>
             this.recheck(Number(btn.dataset.fileId))));
         document.getElementById('batchRecheckBtn')?.addEventListener('click', () => this.recheck(null));
+        document.getElementById('batchAddSalesBtn')?.addEventListener('click', () => this.openSalesPicker());
+        document.querySelectorAll('.batch-repull').forEach(btn => btn.addEventListener('click', () =>
+            this.update(() => api.repullBatchSales(this.run.id, Number(btn.dataset.fileId)))));
+        document.querySelectorAll('.batch-file-rows').forEach(btn => btn.addEventListener('click', async () => {
+            const file = this.run.files.find(f => f.id === Number(btn.dataset.fileId));
+            try {
+                utils.downloadBlob(await api.downloadBatchFileRows(this.run.id, file.id), `${file.filename.replace(/\.xlsx?$/i, '')}.xlsx`);
+            } catch (error) {
+                authManager.showAlert('Download failed: ' + error.message, 'danger');
+            }
+        }));
         document.querySelectorAll('[data-open-waiting]').forEach(btn => btn.addEventListener('click', () =>
             this.show(Number(btn.dataset.openWaiting))));
 
@@ -688,6 +716,63 @@ class MonthlyRunManager {
         document.getElementById('batchLogBtn')?.addEventListener('click', () => downloadRunLog(this.run.id));
         document.getElementById('batchReportBtn')?.addEventListener('click', () => batchHistoryManager.openReport(this.run.id));
         document.getElementById('batchCancelBtn')?.addEventListener('click', () => this.cancel());
+    }
+
+    async openSalesPicker() {
+        const body = document.getElementById('batchSalesModalBody');
+        body.innerHTML = '<p class="text-muted">Loading presets…</p>';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('batchSalesModal')).show();
+        try {
+            await salesPresetManager.fetchPresets();
+        } catch (error) {
+            body.innerHTML = `<div class="alert alert-danger">${esc(error.message)}</div>`;
+            return;
+        }
+        const presets = salesPresetManager.presets;
+        const added = new Set((this.run?.files || []).filter(f => f.source_type === 'sales').map(f => f.preset_id));
+        body.innerHTML = presets.length ? `
+            <p class="mb-3">Period: <strong>${esc(salesPresetManager.periodLabel)}</strong> <span class="text-muted">(always the previous month)</span></p>
+            <div class="list-group">${presets.map(p => `
+                <label class="list-group-item d-flex gap-2 align-items-start">
+                    <input class="form-check-input mt-1" type="checkbox" value="${p.id}" ${added.has(p.id) ? 'disabled' : 'checked'}>
+                    <span>
+                        <strong>${esc(p.name)}</strong>${added.has(p.id) ? ' <span class="text-muted small">(already in this run)</span>' : ''}<br>
+                        <span class="text-muted small">From ${esc(batchRulesManager.databaseName(p.source_config_id))} ·
+                            ${p.rule_id ? `rule ${esc(salesPresetManager.ruleName(p.rule_id) || '?')}` : 'no default rule'}</span>
+                    </span>
+                </label>`).join('')}
+            </div>` : `
+            <p>No sales presets yet.</p>
+            <button class="btn btn-primary" data-bs-dismiss="modal" onclick="document.getElementById('sales-presets-tab').click()">Create a preset</button>`;
+
+        const addBtn = document.getElementById('batchSalesAddBtn');
+        addBtn.disabled = !presets.length;
+        addBtn.onclick = async () => {
+            const ids = [...body.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')].map(b => Number(b.value));
+            bootstrap.Modal.getInstance(document.getElementById('batchSalesModal'))?.hide();
+            if (ids.length) await this.addSales(ids);
+        };
+    }
+
+    async addSales(presetIds) {
+        try {
+            if (!this.run) this.run = (await api.createBatchRun()).run;
+            for (let i = 0; i < presetIds.length; i++) {
+                const preset = salesPresetManager.presets.find(p => p.id === presetIds[i]);
+                this.uploading = `Pulling ${preset?.name || 'sales'} (${i + 1} of ${presetIds.length})…`;
+                this.render();
+                try {
+                    this.run = (await api.addBatchSales(this.run.id, presetIds[i])).run;
+                } catch (error) {
+                    authManager.showAlert(`${preset?.name}: ${error.message}`, 'danger');
+                }
+            }
+        } catch (error) {
+            authManager.showAlert('Failed to start a run: ' + error.message, 'danger');
+        } finally {
+            this.uploading = null;
+            this.render();
+        }
     }
 
     async recheck(fileId) {
