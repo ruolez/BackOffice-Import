@@ -1756,6 +1756,68 @@ html[data-bs-theme="dark"] .segmented .nav-link.active { background: var(--surfa
     .batch-file-rule { width: 100%; max-width: none; order: 3; }
 }
 
+/* Monthly run report */
+.batch-banner { display: flex; align-items: center; gap: 12px; }
+
+.report-title { margin-bottom: 20px; }
+.report-title h2 { font-size: 1.375rem; }
+.report-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.report-kpi {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+}
+.report-kpi-label { font-size: 0.75rem; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.report-kpi-value { font-size: 1.75rem; font-weight: 600; line-height: 1.2; margin-top: 4px; }
+.report-kpi-sub { color: var(--text-2); }
+.report-kpi.is-problem { border-color: var(--danger-border); background: var(--danger-soft); }
+.report-kpi.is-problem .report-kpi-value { color: var(--danger-text); }
+
+.report-section {
+    margin-bottom: 24px;
+    padding: 16px 18px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+}
+.report-db { font-size: 1rem; margin-bottom: 12px; }
+.report-subhead { display: flex; gap: 10px; align-items: baseline; margin: 6px 0 6px; }
+.report-table { margin-bottom: 14px; }
+.report-table > :not(caption) > * > * { padding: 8px 10px; vertical-align: top; }
+.report-table tfoot td { font-weight: 600; border-bottom: 0; }
+.report-col-number { width: 110px; }
+.report-col-lines { width: 70px; }
+.report-col-total { width: 120px; }
+.report-chip {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+}
+
+@media (max-width: 767.98px) {
+    .report-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media print {
+    .sidebar, .no-print, .page-header, #alert-container { display: none !important; }
+    .app-shell { display: block; min-height: 0; }
+    .main { padding: 0; }
+    body { background: #fff; }
+    .report-section, .report-kpi { break-inside: avoid; box-shadow: none; }
+    .report-table tr { break-inside: avoid; }
+}
+
 @media (max-width: 1199.98px) {
     .main { padding: 28px 24px 40px; }
 }

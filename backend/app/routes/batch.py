@@ -5,13 +5,15 @@ import tempfile
 import threading
 from datetime import datetime
 
-from flask import Blueprint, request, jsonify, current_app, Response
+from flask import Blueprint, request, jsonify, current_app, Response, send_file
 from flask_login import login_required, current_user
+from sqlalchemy import func
 from werkzeug.utils import secure_filename
 
 from app.models import db, BatchRule, BatchRun, BatchRunFile, BatchRunStep
 from app.services.excel_service import ExcelService
 from app.services import batch_service as batch
+from app.services.batch_report import build_run_report, build_report_excel
 
 bp = Blueprint('batch', __name__)
 
@@ -135,6 +137,40 @@ def download_run_log(run_id):
         mimetype='text/plain',
         headers={'Content-Disposition': f'attachment; filename=batch-run-{run.id}-log.txt'}
     )
+
+
+@bp.route('/runs/<int:run_id>/report', methods=['GET'])
+@login_required
+def get_run_report(run_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    return jsonify({'success': True, 'report': build_run_report(batch.serialize_run(run))}), 200
+
+
+@bp.route('/runs/<int:run_id>/report.xlsx', methods=['GET'])
+@login_required
+def download_run_report(run_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    buf = build_report_excel(build_run_report(batch.serialize_run(run)))
+    return send_file(buf, as_attachment=True, download_name=f'monthly-run-{run.id}-report.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@bp.route('/runs/<int:run_id>/cancel', methods=['POST'])
+@login_required
+def cancel_run(run_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    if run.status != 'running':
+        return jsonify({'error': 'The run is not running'}), 409
+    run.cancel_requested = True
+    batch.add_log(run, 'warning', 'Cancel requested: stopping after the document being created now')
+    db.session.commit()
+    return jsonify({'success': True, 'run': batch.serialize_run(run)}), 200
 
 
 def _duplicate_warnings(run, sha256):
@@ -273,6 +309,8 @@ def set_step_included(run_id, step_id):
     included = bool((request.get_json() or {}).get('included'))
     if included and step.status == 'excluded':
         step.status = 'pending'
+    elif not included and step.status == 'interrupted':
+        return jsonify({'error': 'This step may already be in the database; run it again so it can be checked'}), 409
     elif not included and step.status in batch.RETRYABLE_STATUSES:
         step.status = 'excluded'
     db.session.commit()
@@ -285,7 +323,9 @@ def execute_run(run_id):
     claimed = (BatchRun.query
                .filter(BatchRun.id == run_id, BatchRun.user_id == current_user.id,
                        BatchRun.status.in_(batch.EXECUTABLE_RUN_STATUSES))
-               .update({'status': 'running', 'started_at': datetime.utcnow(), 'finished_at': None},
+               .update({'status': 'running', 'started_at': func.coalesce(BatchRun.started_at, datetime.utcnow()),
+                        'finished_at': None,
+                        'cancel_requested': False, 'notice': None},
                         synchronize_session=False))
     db.session.commit()
     if not claimed:

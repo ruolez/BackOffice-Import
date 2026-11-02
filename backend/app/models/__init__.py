@@ -70,11 +70,14 @@ class BatchRun(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    # draft -> running -> completed | completed_with_errors | interrupted
+    # draft -> running -> completed | completed_with_errors | cancelled | interrupted
     status = db.Column(db.String(30), nullable=False, default='draft')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     started_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)
+    cancel_requested = db.Column(db.Boolean, default=False)
+    # Why the last start attempt did not run (e.g. a database was unreachable)
+    notice = db.Column(db.Text)
 
     files = db.relationship('BatchRunFile', backref='run', lazy=True, cascade='all, delete-orphan',
                             order_by='BatchRunFile.position')
@@ -121,6 +124,10 @@ class BatchRunStep(db.Model):
     base_number = db.Column(db.Integer)
     doc_number = db.Column(db.String(50))
     doc_id = db.Column(db.Integer)
+    # Saved right before the insert, so a lost connection or restart can be checked against SQL Server
+    attempted_number = db.Column(db.String(50))
+    attempted_total = db.Column(db.Float)
+    attempts = db.Column(db.Integer, default=0)
     message = db.Column(db.Text)
     started_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)

@@ -13,7 +13,7 @@ const BATCH_STATUS = {
     success: { label: 'Created', cls: 'success', icon: 'fa-check' },
     failed: { label: 'Failed', cls: 'danger', icon: 'fa-xmark' },
     blocked: { label: 'Not run', cls: 'warning', icon: 'fa-link-slash' },
-    interrupted: { label: 'Check manually', cls: 'danger', icon: 'fa-triangle-exclamation' }
+    interrupted: { label: 'Interrupted', cls: 'warning', icon: 'fa-triangle-exclamation' }
 };
 
 const RUN_STATUS = {
@@ -21,11 +21,14 @@ const RUN_STATUS = {
     running: { label: 'Running', cls: 'info' },
     completed: { label: 'Completed', cls: 'success' },
     completed_with_errors: { label: 'Completed with errors', cls: 'warning' },
+    cancelled: { label: 'Cancelled', cls: 'warning' },
     interrupted: { label: 'Interrupted', cls: 'danger' }
 };
 
-const RETRYABLE = ['pending', 'failed', 'blocked'];
-const EXECUTABLE_RUNS = ['draft', 'completed_with_errors', 'interrupted'];
+const RETRYABLE = ['pending', 'failed', 'blocked', 'interrupted'];
+const TOGGLEABLE = ['pending', 'failed', 'blocked', 'excluded'];
+const EXECUTABLE_RUNS = ['draft', 'completed_with_errors', 'cancelled', 'interrupted'];
+const FINISHED_RUNS = ['completed', 'completed_with_errors', 'cancelled', 'interrupted'];
 
 const esc = (value) => utils.escapeHtml(String(value ?? ''));
 const money = (value) => utils.formatCurrency(Number(value || 0));
@@ -80,7 +83,7 @@ function renderBatchSteps(file, canToggle) {
         const type = BATCH_STEP_TYPES[step.type] || { short: step.type, icon: 'fa-circle' };
         const p = step.preview || {};
         const number = step.doc_number ? `#${esc(step.doc_number)}` : (step.projected_number ? `<span class="text-muted">#${step.projected_number}?</span>` : '—');
-        const toggleable = canToggle && (RETRYABLE.includes(step.status) || step.status === 'excluded');
+        const toggleable = canToggle && TOGGLEABLE.includes(step.status);
         const included = step.status !== 'excluded';
 
         const issues = [];
@@ -99,6 +102,14 @@ function renderBatchSteps(file, canToggle) {
                         `<li><code>${esc(m.upc)}</code>${m.row ? ` row ${m.row}` : ''}${m.qty != null ? ` · qty ${esc(m.qty)}` : ''}${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}
                     </ul>
                 </details>`);
+        }
+        if (p.recovered) {
+            issues.push(`<div class="batch-issue text-info">Saved by an earlier attempt. Checked in the database, not created twice</div>`);
+        } else if (step.status === 'success' && step.attempts > 1) {
+            issues.push(`<div class="batch-issue text-info">Created on attempt ${step.attempts} after a temporary error</div>`);
+        }
+        if (p.duplicate_number) {
+            issues.push(`<div class="batch-issue text-danger">Number #${esc(step.doc_number)} now exists ${p.duplicate_number} times in ${esc(step.database_name)}. Check the numbering</div>`);
         }
         if (p.products_added) {
             issues.push(`<div class="batch-issue text-info">${p.products_added} product(s) ${step.status === 'success' ? 'were' : 'will be'} added to ${esc(step.database_name)}</div>`);
@@ -511,7 +522,14 @@ class MonthlyRunManager {
             </div>
             ${this.uploading ? `<div class="batch-progress mb-3"><span class="spinner-border spinner-border-sm me-2"></span>${esc(this.uploading)}</div>` : ''}` : '';
 
+        const notice = run?.notice ? `
+            <div class="batch-banner batch-banner-danger mb-3">
+                <div><div class="fw-semibold"><i class="fas fa-plug-circle-xmark me-2"></i>The run did not start</div>
+                <div class="small mt-1">${esc(run.notice)}</div></div>
+            </div>` : '';
+
         container.innerHTML = `
+            ${notice}
             ${run && !isDraft ? this.renderResultBanner(run) : ''}
             ${dropZone}
             ${run?.files.length ? renderBatchFiles(run, { editable: isDraft, rules }) : ''}
@@ -527,7 +545,11 @@ class MonthlyRunManager {
         const when = run.started_at ? utils.formatDateTime(run.started_at) : '';
         let text;
         if (run.status === 'running') {
-            text = `<span class="spinner-border spinner-border-sm me-2"></span>Creating documents: ${created} of ${steps.length} done…`;
+            text = `<span class="spinner-border spinner-border-sm me-2"></span>${run.cancel_requested
+                ? 'Cancelling after the current document…'
+                : `Creating documents: ${created} of ${steps.length} done…`}`;
+        } else if (run.status === 'cancelled') {
+            text = `Cancelled. ${created} of ${steps.length} documents were created; the rest can be started again.`;
         } else if (problems) {
             text = `${created} of ${steps.length} documents created. ${problems} need attention. Read the messages below.`;
         } else {
@@ -540,6 +562,10 @@ class MonthlyRunManager {
                     <div class="small mt-1">${text}</div>
                     ${when ? `<div class="small text-muted">Started ${when}</div>` : ''}
                 </div>
+                ${run.status === 'running' && !run.cancel_requested
+                    ? `<button class="btn btn-outline-danger btn-sm ms-auto" id="batchCancelBtn"><i class="fas fa-stop me-2"></i>Cancel</button>` : ''}
+                ${FINISHED_RUNS.includes(run.status)
+                    ? `<button class="btn btn-primary ms-auto" id="batchReportBtn"><i class="fas fa-file-lines me-2"></i>View report</button>` : ''}
             </div>`;
     }
 
@@ -600,6 +626,18 @@ class MonthlyRunManager {
         document.getElementById('batchDiscardBtn')?.addEventListener('click', () => this.discard());
         document.getElementById('batchNewBtn')?.addEventListener('click', () => { this.run = null; this.render(); });
         document.getElementById('batchLogBtn')?.addEventListener('click', () => downloadRunLog(this.run.id));
+        document.getElementById('batchReportBtn')?.addEventListener('click', () => batchHistoryManager.openReport(this.run.id));
+        document.getElementById('batchCancelBtn')?.addEventListener('click', () => this.cancel());
+    }
+
+    async cancel() {
+        if (!confirm('Stop the run after the document being created now? Everything created so far stays; the rest can be started again later.')) return;
+        try {
+            this.run = (await api.cancelBatchRun(this.run.id)).run;
+            this.render();
+        } catch (error) {
+            authManager.showAlert('Failed to cancel: ' + error.message, 'danger');
+        }
     }
 
     async update(call) {
@@ -646,7 +684,7 @@ class MonthlyRunManager {
         const byType = { invoice: 0, copy: 0, po: 0 };
         steps.forEach(s => { byType[s.type] += 1; });
         const lines = [
-            `This will create in SQL Server:`,
+            `This will create in SQL Server (every database is checked first):`,
             `  • ${byType.invoice} invoice(s) from Excel`,
             `  • ${byType.copy} invoice copy(ies)`,
             `  • ${byType.po} purchase order(s)`
@@ -674,6 +712,8 @@ class MonthlyRunManager {
             }
             if (this.run.status === 'running') {
                 this.pollTimer = setTimeout(tick, 1500);
+            } else if (this.run.notice) {
+                authManager.showAlert('The run did not start: a database could not be reached', 'danger');
             } else {
                 const ok = this.run.status === 'completed';
                 authManager.showAlert(ok ? 'Monthly run completed' : 'Run finished with problems. See the details.', ok ? 'success' : 'warning');
@@ -702,7 +742,20 @@ class BatchHistoryManager {
     }
 
     init() {
-        document.getElementById('batch-history-tab')?.addEventListener('shown.bs.tab', () => this.showList());
+        document.getElementById('batch-history-tab')?.addEventListener('shown.bs.tab', () => {
+            if (this.pendingReport) {
+                const runId = this.pendingReport;
+                this.pendingReport = null;
+                this.showReport(runId);
+            } else {
+                this.showList();
+            }
+        });
+    }
+
+    openReport(runId) {
+        this.pendingReport = runId;
+        document.getElementById('batch-history-tab').click();
     }
 
     async showList() {
@@ -727,13 +780,20 @@ class BatchHistoryManager {
                                 <td>${r.file_count}</td>
                                 <td>${c.success || 0}</td>
                                 <td>${problems ? `<span class="text-danger">${problems}</span>` : '0'}</td>
-                                <td class="text-end"><button class="btn btn-sm btn-outline-secondary">Open</button></td>
+                                <td class="text-end text-nowrap">
+                                    ${FINISHED_RUNS.includes(r.status) ? `<button class="btn btn-sm btn-primary me-1" data-report="${r.id}">Report</button>` : ''}
+                                    <button class="btn btn-sm btn-outline-secondary">Open</button>
+                                </td>
                             </tr>`;
                         }).join('')}</tbody>
                     </table>
                 </div>`;
             container.querySelectorAll('[data-run]').forEach(row =>
                 row.addEventListener('click', () => this.showRun(Number(row.dataset.run))));
+            container.querySelectorAll('[data-report]').forEach(btn => btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showReport(Number(btn.dataset.report));
+            }));
         } catch (error) {
             container.innerHTML = `<div class="alert alert-danger">Failed to load runs: ${esc(error.message)}</div>`;
         }
@@ -755,6 +815,7 @@ class BatchHistoryManager {
                     ${statusPill(RUN_STATUS, run.status)}
                     <div class="ms-auto d-flex gap-2">
                         <button class="btn btn-outline-secondary" id="historyLog"><i class="fas fa-file-lines me-2"></i>Download log</button>
+                        ${FINISHED_RUNS.includes(run.status) ? `<button class="btn btn-primary" id="historyReport"><i class="fas fa-table-list me-2"></i>Report</button>` : ''}
                         ${canContinue ? `<button class="btn btn-primary" id="historyOpen"><i class="fas fa-bolt me-2"></i>Open in Monthly Run</button>` : ''}
                     </div>
                 </div>
@@ -771,6 +832,7 @@ class BatchHistoryManager {
 
             document.getElementById('historyBack').addEventListener('click', () => this.showList());
             document.getElementById('historyLog').addEventListener('click', () => downloadRunLog(run.id));
+            document.getElementById('historyReport')?.addEventListener('click', () => this.showReport(run.id));
             document.getElementById('historyOpen')?.addEventListener('click', () => monthlyRunManager.openRun(run.id));
             container.querySelectorAll('[data-log-filter]').forEach(b => b.addEventListener('click', () => {
                 this.logFilter = b.dataset.logFilter;
@@ -781,6 +843,138 @@ class BatchHistoryManager {
         }
     }
 }
+
+Object.assign(BatchHistoryManager.prototype, {
+    async showReport(runId) {
+        const container = document.getElementById('batch-history-content');
+        container.innerHTML = '<p class="text-muted">Loading report…</p>';
+        try {
+            const { report } = await api.getBatchRunReport(runId);
+            container.innerHTML = this.renderReport(report);
+            document.getElementById('reportBack').addEventListener('click', () => this.showRun(runId));
+            document.getElementById('reportPrint').addEventListener('click', () => window.print());
+            document.getElementById('reportExcel').addEventListener('click', async () => {
+                try {
+                    utils.downloadBlob(await api.downloadBatchRunReport(runId), `monthly-run-${runId}-report.xlsx`);
+                } catch (error) {
+                    authManager.showAlert('Failed to download report: ' + error.message, 'danger');
+                }
+            });
+        } catch (error) {
+            container.innerHTML = `<div class="alert alert-danger">Failed to load report: ${esc(error.message)}</div>`;
+        }
+    },
+
+    renderReport(report) {
+        const run = report.run;
+        const t = report.totals;
+        const kpi = (label, count, total, cls = '') => `
+            <div class="report-kpi ${cls}">
+                <div class="report-kpi-label">${label}</div>
+                <div class="report-kpi-value">${count}</div>
+                ${total != null ? `<div class="report-kpi-sub">${money(total)}</div>` : ''}
+            </div>`;
+        const notes = (d) => d.notes.length ? d.notes.map(n => `<div class="small text-muted">${esc(n)}</div>`).join('') : '';
+
+        const byDatabase = report.by_database.map(group => `
+            <section class="report-section">
+                <h5 class="report-db"><i class="fas fa-database me-2"></i>${esc(group.database)}</h5>
+                ${group.sections.map(sec => `
+                    <div class="report-subhead">
+                        <strong>${sec.label}</strong>
+                        <span class="text-muted">${sec.count} · ${sec.first === sec.last ? `#${esc(sec.first)}` : `#${esc(sec.first)} – #${esc(sec.last)}`}</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table report-table">
+                            <thead><tr><th class="report-col-number">Number</th><th>${sec.type === 'po' ? 'Supplier' : 'Customer'}</th>
+                                ${sec.type === 'copy' ? '<th>Copied from</th>' : ''}<th>File</th><th class="text-end report-col-lines">Lines</th><th class="text-end report-col-total">Total</th></tr></thead>
+                            <tbody>${sec.documents.map(d => `
+                                <tr>
+                                    <td><strong>#${esc(d.number)}</strong></td>
+                                    <td>${esc(d.party)}${d.account_no ? ` <span class="text-muted small">${esc(d.account_no)}</span>` : ''}${notes(d)}</td>
+                                    ${sec.type === 'copy' ? `<td>${esc(d.copied_from)}</td>` : ''}
+                                    <td class="small">${esc(d.file)}</td>
+                                    <td class="text-end">${d.lines}</td>
+                                    <td class="text-end">${money(d.total)}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                            <tfoot><tr><td colspan="${sec.type === 'copy' ? 5 : 4}" class="text-end">Total ${sec.label.toLowerCase()}</td><td class="text-end">${money(sec.total)}</td></tr></tfoot>
+                        </table>
+                    </div>`).join('')}
+            </section>`).join('');
+
+        const byFile = `
+            <div class="table-responsive">
+                <table class="table report-table">
+                    <thead><tr><th>File</th><th>Rule</th><th>Created</th><th class="text-end">Problems</th></tr></thead>
+                    <tbody>${report.by_file.map(f => `
+                        <tr>
+                            <td>${esc(f.file)}</td>
+                            <td>${esc(f.rule)}</td>
+                            <td>${f.documents.map(d => `<span class="report-chip">${esc(d.type_label)} · ${esc(d.database)} <strong>#${esc(d.number)}</strong></span>`).join(' ') || '<span class="text-muted">Nothing</span>'}</td>
+                            <td class="text-end">${f.problems ? `<span class="text-danger">${f.problems}</span>` : '0'}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+
+        const notCreated = report.not_created.length ? `
+            <section class="report-section">
+                <h5 class="report-db text-danger"><i class="fas fa-circle-exclamation me-2"></i>Not created (${report.not_created.length})</h5>
+                <div class="table-responsive">
+                    <table class="table report-table">
+                        <thead><tr><th>File</th><th>Document</th><th>Database</th><th>Customer / Supplier</th><th>Status</th><th>Reason</th></tr></thead>
+                        <tbody>${report.not_created.map(p => `
+                            <tr><td class="small">${esc(p.file)}</td><td>${esc(p.document)}</td><td>${esc(p.database)}</td>
+                                <td>${esc(p.party)}</td><td>${esc(p.status)}</td><td class="small">${esc(p.reason)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </section>` : '';
+
+        const skipped = report.skipped_upcs.length ? `
+            <section class="report-section">
+                <h5 class="report-db"><i class="fas fa-barcode me-2"></i>UPCs not found, lines skipped (${report.skipped_upcs.length})</h5>
+                <div class="table-responsive">
+                    <table class="table report-table">
+                        <thead><tr><th>UPC</th><th class="text-end">Qty</th><th>Excel row</th><th>Document</th><th>Database</th><th>File</th></tr></thead>
+                        <tbody>${report.skipped_upcs.map(u => `
+                            <tr><td><code>${esc(u.upc)}</code></td><td class="text-end">${esc(u.qty ?? '')}</td><td>${esc(u.row ?? '')}</td>
+                                <td>${esc(u.document)}</td><td>${esc(u.database)}</td><td class="small">${esc(u.file)}</td></tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </section>` : '';
+
+        return `
+            <div class="report">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-3 no-print">
+                    <button class="btn btn-outline-secondary" id="reportBack"><i class="fas fa-arrow-left me-2"></i>Run details</button>
+                    <div class="ms-auto d-flex gap-2">
+                        <button class="btn btn-outline-secondary" id="reportPrint"><i class="fas fa-print me-2"></i>Print</button>
+                        <button class="btn btn-primary" id="reportExcel"><i class="fas fa-file-excel me-2"></i>Download Excel</button>
+                    </div>
+                </div>
+                <div class="report-title">
+                    <h2 class="mb-1">Monthly run #${run.id} report</h2>
+                    <div class="text-muted">${utils.formatDateTime(run.started_at || run.created_at)} · ${statusPill(RUN_STATUS, run.status)}</div>
+                </div>
+                <div class="report-kpis">
+                    ${kpi('Invoices', t.invoice.count, t.invoice.total)}
+                    ${kpi('Invoice copies', t.copy.count, t.copy.total)}
+                    ${kpi('Purchase orders', t.po.count, t.po.total)}
+                    ${kpi('Not created', report.not_created.length, null, report.not_created.length ? 'is-problem' : '')}
+                </div>
+                ${notCreated}
+                ${byDatabase || '<p class="text-muted">No documents were created.</p>'}
+                <section class="report-section">
+                    <h5 class="report-db"><i class="fas fa-file-excel me-2"></i>By file</h5>
+                    ${byFile}
+                </section>
+                ${skipped}
+            </div>`;
+    }
+});
 
 const batchRulesManager = new BatchRulesManager();
 const monthlyRunManager = new MonthlyRunManager();

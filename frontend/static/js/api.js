@@ -296,6 +296,18 @@ class ApiService {
         return this.request(`/batch/runs/${runId}/execute`, { method: 'POST' });
     }
 
+    async cancelBatchRun(runId) {
+        return this.request(`/batch/runs/${runId}/cancel`, { method: 'POST' });
+    }
+
+    async getBatchRunReport(runId) {
+        return this.request(`/batch/runs/${runId}/report`);
+    }
+
+    async downloadBatchRunReport(runId) {
+        return this.requestBlob(`/batch/runs/${runId}/report.xlsx`);
+    }
+
     async downloadBatchRunLog(runId) {
         return this.requestBlob(`/batch/runs/${runId}/log.txt`);
     }

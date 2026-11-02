@@ -5,7 +5,10 @@ from flask import Flask
 
 from app.models import db, User, DatabaseConfig, BatchRule, BatchRun, BatchRunFile, BatchLog
 from app.services import batch_service as batch
-from app.services.batch_service import match_rule_for_filename, validate_rule, project_document_numbers
+from app.services.batch_service import match_rule_for_filename, validate_rule, project_document_numbers, is_transient_error
+from app.services.batch_report import build_run_report, build_report_excel
+
+LINK_FAILURE = "Database error: ('08S01', '[08S01] [Microsoft][ODBC Driver 18 for SQL Server]Communication link failure')"
 
 
 class TestMatchRuleForFilename:
@@ -58,6 +61,26 @@ class TestValidateRule:
         assert validate_rule('Acme', steps, self.DBS) == expected
 
 
+class TestIsTransientError:
+    @pytest.mark.parametrize('message', [
+        LINK_FAILURE,
+        "Connection failed: ('HYT00', '[HYT00] [Microsoft][ODBC Driver 18 for SQL Server]Login timeout expired')",
+        "Database error: ('40001', '[40001] Transaction (Process ID 61) was deadlocked on lock resources')",
+        "Connection failed: ('08001', '[08001] [FreeTDS][SQL Server]Unable to connect: Adaptive Server is unavailable')",
+    ])
+    def test_connection_timeout_and_deadlock_errors_are_retried(self, message):
+        assert is_transient_error(message) is True
+
+    @pytest.mark.parametrize('message', [
+        'Customer with ID 5 not found',
+        "Database error: ('22001', '[22001] String or binary data would be truncated')",
+        "Connection failed: ('28000', \"[28000] Login failed for user 'sa'\")",
+        '',
+    ])
+    def test_data_and_login_errors_are_not_retried(self, message):
+        assert is_transient_error(message) is False
+
+
 class TestProjectDocumentNumbers:
     def test_steps_sharing_a_series_get_consecutive_numbers(self):
         steps = [
@@ -92,6 +115,10 @@ class FakeBackOffice:
     """In-memory stand-in for one SQL Server database (DatabaseService interface)"""
 
     def __init__(self, items=(), customers=(), suppliers=(), next_invoice=100, next_po=1):
+        # failures[method] = list of outcomes for the next calls: an error message, or
+        # ('saved', message) to store the document and still report the error (connection lost after commit)
+        self.failures = {}
+        self.reachable = True
         self.items = {i['ProductUPC']: i for i in items}
         self.customers = {c['CustomerID']: c for c in customers}
         self.suppliers = {s['SupplierID']: s for s in suppliers}
@@ -100,7 +127,26 @@ class FakeBackOffice:
         self.invoices = {}
         self.pos = {}
 
+    def _injected(self, method):
+        queue = self.failures.get(method)
+        return queue.pop(0) if queue else None
+
+    def test_connection(self):
+        return (True, 'Connection successful') if self.reachable else (False, f'Connection failed: {LINK_FAILURE}')
+
+    def find_invoices_by_number(self, number):
+        return True, [{'id': i, 'party_id': d['header']['customer_id'], 'total': d['header']['invoice_total'],
+                       'lines': d['header']['no_lines']} for i, d in self.invoices.items()
+                      if str(d['header']['invoice_number']) == str(number)], 'ok'
+
+    def find_purchase_orders_by_number(self, number):
+        return True, [{'id': i, 'party_id': d['header']['supplier_id'], 'total': d['header']['po_total'],
+                       'lines': d['header']['no_lines']} for i, d in self.pos.items()
+                      if str(d['header']['po_number']) == str(number)], 'ok'
+
     def get_customer_by_id(self, customer_id):
+        if not self.reachable:
+            return False, {}, f'Database query failed: {LINK_FAILURE}'
         c = self.customers.get(customer_id)
         return (True, c, 'ok') if c else (False, {}, f'Customer with ID {customer_id} not found')
 
@@ -126,15 +172,20 @@ class FakeBackOffice:
         return True, self.next_po, 'ok'
 
     def create_invoice(self, header, lines):
-        doc_id = len(self.invoices) + 1
-        self.invoices[doc_id] = {'header': header, 'lines': lines}
-        self.next_invoice = int(header['invoice_number']) + 1
-        return True, doc_id, 'ok'
+        return self._create(self.invoices, 'create_invoice', header, lines, 'invoice_number', 'next_invoice')
 
     def create_purchase_order(self, header, lines):
-        doc_id = len(self.pos) + 1
-        self.pos[doc_id] = {'header': header, 'lines': lines}
-        self.next_po = int(header['po_number']) + 1
+        return self._create(self.pos, 'create_purchase_order', header, lines, 'po_number', 'next_po')
+
+    def _create(self, store, method, header, lines, number_key, counter):
+        outcome = self._injected(method)
+        if isinstance(outcome, str):
+            return False, 0, outcome
+        doc_id = len(store) + 1
+        store[doc_id] = {'header': header, 'lines': lines}
+        setattr(self, counter, int(header[number_key]) + 1)
+        if outcome:
+            return False, 0, outcome[1]
         return True, doc_id, 'ok'
 
     def get_invoice_with_details(self, invoice_id):
@@ -199,7 +250,14 @@ def setup(app):
     service_for = lambda config: fakes[config.id]
     batch.plan_file(run_file, rule, batch.user_configs(user.id), service_for)
     db.session.commit()
-    return {'run': run, 'file': run_file, 'fakes': fakes, 'a': db_a.id, 'b': db_b.id, 'service_for': service_for}
+    return {'run': run, 'file': run_file, 'fakes': fakes, 'a': db_a.id, 'b': db_b.id, 'service_for': service_for,
+            'sleeps': []}
+
+
+def run_now(setup):
+    setup['run'].status = 'running'
+    db.session.commit()
+    batch.execute_run(setup['run'].id, setup['service_for'], sleep=setup['sleeps'].append)
 
 
 def statuses(run_file):
@@ -221,10 +279,8 @@ class TestPlanAndExecute:
 
     def test_run_creates_invoice_copy_and_po_in_the_right_databases(self, setup):
         fakes = setup['fakes']
-        setup['run'].status = 'running'
-        db.session.commit()
 
-        batch.execute_run(setup['run'].id, setup['service_for'])
+        run_now(setup)
 
         copied = fakes[setup['b']].invoices[1]
         assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'success', '90'), ('po', 'success', '70')]
@@ -237,10 +293,8 @@ class TestPlanAndExecute:
     def test_failed_invoice_blocks_its_copy_and_retry_creates_only_what_is_missing(self, setup):
         fakes = setup['fakes']
         del fakes[setup['a']].customers[5]
-        setup['run'].status = 'running'
-        db.session.commit()
 
-        batch.execute_run(setup['run'].id, setup['service_for'])
+        run_now(setup)
 
         assert statuses(setup['file']) == [('inv', 'failed', None), ('cp', 'blocked', None), ('po', 'success', '70')]
         assert setup['run'].status == 'completed_with_errors'
@@ -249,9 +303,7 @@ class TestPlanAndExecute:
         ]
 
         fakes[setup['a']].customers[5] = CUSTOMER_A
-        setup['run'].status = 'running'
-        db.session.commit()
-        batch.execute_run(setup['run'].id, setup['service_for'])
+        run_now(setup)
 
         assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'success', '90'), ('po', 'success', '70')]
         assert (len(fakes[setup['a']].invoices), len(fakes[setup['a']].pos), len(fakes[setup['b']].invoices)) == (1, 1, 1)
@@ -259,10 +311,8 @@ class TestPlanAndExecute:
     def test_copy_with_unknown_customer_fails_without_adding_products(self, setup):
         fakes = setup['fakes']
         del fakes[setup['b']].customers[8]
-        setup['run'].status = 'running'
-        db.session.commit()
 
-        batch.execute_run(setup['run'].id, setup['service_for'])
+        run_now(setup)
 
         assert statuses(setup['file'])[1] == ('cp', 'failed', None)
         assert (sorted(fakes[setup['b']].items), fakes[setup['b']].invoices) == (['111'], {})
@@ -283,10 +333,132 @@ class TestPlanAndExecute:
     def test_excluded_steps_are_not_created(self, setup):
         po_step = setup['file'].steps[2]
         po_step.status = 'excluded'
-        setup['run'].status = 'running'
-        db.session.commit()
 
-        batch.execute_run(setup['run'].id, setup['service_for'])
+        run_now(setup)
 
         assert statuses(setup['file'])[2] == ('po', 'excluded', None)
         assert (setup['fakes'][setup['a']].pos, setup['run'].status) == ({}, 'completed')
+
+
+class TestRetriesAndSafety:
+    def test_temporary_error_is_retried_and_the_document_created_once(self, setup):
+        fake_a = setup['fakes'][setup['a']]
+        fake_a.failures['create_invoice'] = [LINK_FAILURE]
+
+        run_now(setup)
+
+        assert statuses(setup['file'])[0] == ('inv', 'success', '500')
+        assert (len(fake_a.invoices), setup['file'].steps[0].attempts, setup['sleeps']) == (1, 2, [3])
+
+    def test_saved_but_unacknowledged_create_is_found_instead_of_duplicated(self, setup):
+        fake_a = setup['fakes'][setup['a']]
+        fake_a.failures['create_invoice'] = [('saved', LINK_FAILURE)]
+
+        run_now(setup)
+
+        step = setup['file'].steps[0]
+        assert (step.status, step.doc_number, step.doc_id, len(fake_a.invoices)) == ('success', '500', 1, 1)
+        assert json.loads(step.preview_json)['recovered'] is True
+        assert statuses(setup['file'])[1:] == [('cp', 'success', '90'), ('po', 'success', '70')]
+
+    def test_interrupted_step_that_was_saved_is_not_created_again(self, setup):
+        fake_a = setup['fakes'][setup['a']]
+        fake_a.failures['create_invoice'] = [('saved', 'Unexpected error: worker killed')]
+        run_now(setup)
+        step = setup['file'].steps[0]
+        assert step.status == 'failed'
+        step.status = 'interrupted'
+        db.session.commit()
+
+        run_now(setup)
+
+        assert (step.status, step.doc_number, len(fake_a.invoices)) == ('success', '500', 1)
+
+    def test_permanent_error_is_not_retried(self, setup):
+        fake_a = setup['fakes'][setup['a']]
+        fake_a.failures['create_invoice'] = ["Database error: ('22001', 'String or binary data would be truncated')"]
+
+        run_now(setup)
+
+        assert (statuses(setup['file'])[0], setup['file'].steps[0].attempts, setup['sleeps']) == (
+            ('inv', 'failed', None), 1, [])
+
+    def test_unreachable_database_at_start_creates_nothing(self, setup):
+        setup['fakes'][setup['b']].reachable = False
+
+        run_now(setup)
+
+        assert (setup['run'].status, setup['fakes'][setup['a']].invoices) == ('draft', {})
+        assert [s.status for s in setup['file'].steps] == ['pending', 'pending', 'pending']
+        assert setup['run'].notice.startswith('Nothing was created: could not connect to DB-B.')
+
+    def test_database_that_goes_down_mid_run_is_not_tried_again(self, setup):
+        fake_b = setup['fakes'][setup['b']]
+        rule = BatchRule.query.first()
+        second = BatchRunFile(run_id=setup['run'].id, position=1, filename='acme-2.xlsx', rows_json=json.dumps(ROWS))
+        setup['run'].files.append(second)
+        db.session.flush()
+        batch.plan_file(second, rule, batch.user_configs(setup['run'].user_id), setup['service_for'])
+        db.session.commit()
+        original_insert = fake_b.insert_items
+
+        def insert_then_go_down(items):
+            fake_b.reachable = False
+            return False, 0, f'Database error: {LINK_FAILURE}'
+        fake_b.insert_items = insert_then_go_down
+
+        run_now(setup)
+
+        assert [s.status for s in second.steps] == ['success', 'failed', 'success']
+        assert second.steps[1].message == 'Not attempted: DB-B stopped responding during this run'
+        assert setup['file'].steps[1].attempts == 3
+        assert second.steps[1].attempts == 0
+        fake_b.insert_items = original_insert
+
+    def test_cancel_stops_before_the_next_document(self, setup):
+        fake_a = setup['fakes'][setup['a']]
+        original = fake_a.create_invoice
+
+        def create_and_cancel(header, lines):
+            setup['run'].cancel_requested = True
+            db.session.commit()
+            return original(header, lines)
+        fake_a.create_invoice = create_and_cancel
+
+        run_now(setup)
+
+        assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'pending', None), ('po', 'pending', None)]
+        assert setup['run'].status == 'cancelled'
+
+
+class TestRunReport:
+    def test_report_lists_created_documents_by_database_and_what_was_not_created(self, setup):
+        setup['file'].steps[2].status = 'excluded'
+        db.session.commit()
+        run_now(setup)
+
+        report = build_run_report(batch.serialize_run(setup['run']))
+
+        assert [(d['database'], d['type'], d['number'], d['party'], d['total'], d['copied_from'])
+                for d in report['documents']] == [
+            ('DB-A', 'invoice', '500', 'Acme', 14.0, ''),
+            ('DB-B', 'copy', '90', 'Acme (B)', 14.0, '#500 in DB-A'),
+        ]
+        assert [(g['database'], [(s['label'], s['count'], s['first'], s['last']) for s in g['sections']])
+                for g in report['by_database']] == [
+            ('DB-A', [('Invoices', 1, '500', '500')]),
+            ('DB-B', [('Invoice copies', 1, '90', '90')]),
+        ]
+        assert [(p['document'], p['status']) for p in report['not_created']] == [('Purchase order', 'Skipped')]
+        assert [(u['document'], u['upc']) for u in report['skipped_upcs']] == [('Invoice #500', '999')]
+
+    def test_excel_report_has_one_row_per_created_document(self, setup):
+        from openpyxl import load_workbook
+        run_now(setup)
+
+        workbook = load_workbook(build_report_excel(build_run_report(batch.serialize_run(setup['run']))))
+
+        rows = list(workbook['Documents'].iter_rows(min_row=2, values_only=True))
+        assert workbook.sheetnames == ['Summary', 'Documents', 'Not created', 'Skipped UPCs']
+        assert [(r[0], r[1], r[2]) for r in rows] == [
+            ('DB-A', 'Invoice', '500'), ('DB-A', 'Purchase order', '70'), ('DB-B', 'Invoice copy', '90')]

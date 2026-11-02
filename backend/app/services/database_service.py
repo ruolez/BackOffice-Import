@@ -704,6 +704,35 @@ class DatabaseService:
             logger.error(f"Unexpected error getting next PO number: {e}")
             return False, 1, f"Unexpected error: {str(e)}"
 
+    def find_invoices_by_number(self, invoice_number: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Invoices with this number (normally one), to check whether a create really happened"""
+        return self._find_documents("""
+            SELECT InvoiceID AS id, CustomerID AS party_id, InvoiceTotal AS total, NoLines AS lines
+            FROM Invoices_tbl WHERE InvoiceNumber = ?
+        """, invoice_number)
+
+    def find_purchase_orders_by_number(self, po_number: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Purchase orders with this number (normally one), to check whether a create really happened"""
+        return self._find_documents("""
+            SELECT PoID AS id, SupplierID AS party_id, PoTotal AS total, NoLines AS lines
+            FROM PurchaseOrders_tbl WHERE PoNumber = ?
+        """, po_number)
+
+    def _find_documents(self, query: str, number: str) -> Tuple[bool, List[Dict[str, Any]], str]:
+        try:
+            with pyodbc.connect(self.connection_string, timeout=30) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (str(number),))
+                columns = [column[0] for column in cursor.description]
+                rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                return True, rows, f"Found {len(rows)} document(s)"
+        except pyodbc.Error as e:
+            logger.error(f"Document lookup failed: {e}")
+            return False, [], f"Database query failed: {str(e)}"
+        except Exception as e:
+            logger.error(f"Unexpected error during document lookup: {e}")
+            return False, [], f"Unexpected error: {str(e)}"
+
     def get_invoices_list(self, page: int = 1, per_page: int = 25, search: str = None) -> Tuple[bool, Dict[str, Any], str]:
         """Get paginated list of invoices with optional search by InvoiceNumber"""
         try:

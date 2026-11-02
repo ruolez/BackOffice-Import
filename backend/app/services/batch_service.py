@@ -3,6 +3,7 @@ invoice copies and purchase orders across databases in one go."""
 
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -17,16 +18,33 @@ logger = logging.getLogger(__name__)
 
 STEP_TYPES = ('invoice', 'po', 'copy')
 STEP_LABELS = {'invoice': 'Invoice', 'po': 'Purchase order', 'copy': 'Copy invoice'}
-RETRYABLE_STATUSES = ('pending', 'failed', 'blocked')
-EXECUTABLE_RUN_STATUSES = ('draft', 'completed_with_errors', 'interrupted')
+RETRYABLE_STATUSES = ('pending', 'failed', 'blocked', 'interrupted')
+EXECUTABLE_RUN_STATUSES = ('draft', 'completed_with_errors', 'cancelled', 'interrupted')
+
+MAX_ATTEMPTS = 3
+RETRY_DELAYS = (3, 10)  # seconds to wait before attempt 2 and 3
+
+# SQLSTATEs / driver texts of failures that may succeed when tried again:
+# connection problems, timeouts and deadlocks. Anything else is treated as permanent.
+TRANSIENT_MARKERS = (
+    '08001', '08s01', '08004', 'hyt00', 'hyt01', '40001', 'deadlock', 'timeout expired', 'login timeout',
+    'communication link failure', 'tcp provider', 'connection is busy', 'connection reset',
+    'adaptive server is unavailable', 'unable to connect',
+)
 
 ServiceFactory = Callable[[DatabaseConfig], Any]
 
 
+def is_transient_error(message: str) -> bool:
+    text = (message or '').lower()
+    return any(marker in text for marker in TRANSIENT_MARKERS)
+
+
 class StepError(Exception):
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None, transient: Optional[bool] = None):
         super().__init__(message)
         self.details = details or {}
+        self.transient = is_transient_error(message) if transient is None else transient
 
 
 def document_kind(step_type: str) -> str:
@@ -296,12 +314,43 @@ def plan_file(run_file: BatchRunFile, rule: BatchRule, configs: Dict[int, Databa
                     step=step, details=traceback.format_exc())
 
 
+def _document_total(step_type: str, document: Dict[str, Any]) -> float:
+    return round(float((document.get('po_total') if step_type == 'po' else document.get('invoice_total')) or 0), 2)
+
+
+def find_documents(step_type: str, service, number) -> List[Dict[str, Any]]:
+    """Documents in SQL Server with this number, as [{id, party_id, total, lines}]"""
+    finder = service.find_purchase_orders_by_number if step_type == 'po' else service.find_invoices_by_number
+    ok, rows, message = finder(str(number))
+    if not ok:
+        raise StepError(f'Could not check whether #{number} exists: {message}')
+    return [{'id': int(r['id']), 'party_id': r.get('party_id'), 'total': round(float(r.get('total') or 0), 2),
+             'lines': r.get('lines')} for r in rows]
+
+
+def find_created_document(step: BatchRunStep, service) -> Optional[Dict[str, Any]]:
+    """The document an earlier attempt of this step saved, if any (same number, party and total)"""
+    if not step.attempted_number:
+        return None
+    for doc in find_documents(step.type, service, step.attempted_number):
+        if doc['party_id'] == step.party_id and abs(doc['total'] - (step.attempted_total or 0)) < 0.01:
+            return doc
+    return None
+
+
 def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: Dict[str, BatchRunStep],
-                  configs: Dict[int, DatabaseConfig], service_for: ServiceFactory):
+                  configs: Dict[int, DatabaseConfig], service_for: ServiceFactory,
+                  before_create: Callable[[str, float], None]):
     config = configs.get(step.database_config_id)
     if config is None:
         raise StepError('The database for this step no longer exists')
     service = service_for(config)
+
+    existing = find_created_document(step, service)
+    if existing:
+        summary = {**json.loads(step.preview_json or '{}'), 'lines': existing['lines'], 'total': existing['total'],
+                   'recovered': True}
+        return step.attempted_number, existing['id'], summary
 
     if step.type == 'copy':
         source = steps_by_key[step.source_step_key]
@@ -319,6 +368,8 @@ def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: 
         document, missing = _excel_document(step.type, service, rows, step.party_id)
         added = 0
 
+    number = _document_number(step.type, document)
+    before_create(number, _document_total(step.type, document))
     if step.type == 'po':
         ok, doc_id, message = service.create_purchase_order(_document_header(document), document['lines'])
     else:
@@ -326,35 +377,106 @@ def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: 
     if not ok:
         raise StepError(message)
 
-    return _document_number(step.type, document), int(doc_id), _summary(step.type, document, missing, added)
+    return number, int(doc_id), _summary(step.type, document, missing, added)
 
 
-def execute_run(run_id: int, service_for: ServiceFactory = DatabaseService):
-    """Create every pending/failed/blocked step of a run. The caller has already set status='running'."""
+def _step_databases(step: BatchRunStep, steps_by_key: Dict[str, BatchRunStep]) -> List[int]:
+    ids = [step.database_config_id]
+    if step.type == 'copy' and step.source_step_key in steps_by_key:
+        ids.append(steps_by_key[step.source_step_key].database_config_id)
+    return ids
+
+
+def _connect_with_retries(config: DatabaseConfig, service_for: ServiceFactory, sleep) -> Tuple[bool, str]:
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        ok, message = service_for(config).test_connection()
+        if ok or not is_transient_error(message) or attempt == MAX_ATTEMPTS:
+            return ok, message
+        sleep(RETRY_DELAYS[attempt - 1])
+    return False, 'unreachable'
+
+
+def check_databases(run: BatchRun, configs: Dict[int, DatabaseConfig], service_for: ServiceFactory,
+                    sleep=time.sleep) -> Dict[str, str]:
+    """Connect to every database the remaining steps need; {name: problem} for the ones that fail"""
+    needed = set()
+    for run_file in run.files:
+        if run_file.error:
+            continue
+        steps_by_key = {s.step_key: s for s in run_file.steps}
+        for step in run_file.steps:
+            if step.status in RETRYABLE_STATUSES:
+                needed.update(_step_databases(step, steps_by_key))
+
+    problems = {}
+    for config_id in sorted(i for i in needed if i is not None):
+        config = configs.get(config_id)
+        if config is None:
+            problems[f'database #{config_id}'] = 'this database configuration was deleted'
+            continue
+        ok, message = _connect_with_retries(config, service_for, sleep)
+        if not ok:
+            problems[config.name] = message
+    return problems
+
+
+def _cancel_requested(run: BatchRun) -> bool:
+    db.session.expire(run, ['cancel_requested'])
+    return bool(run.cancel_requested)
+
+
+def execute_run(run_id: int, service_for: ServiceFactory = DatabaseService, sleep=time.sleep):
+    """Create every remaining step of a run. The caller has already set status='running'.
+
+    Before anything is created every database involved must answer. Temporary errors are retried;
+    before each retry the step checks whether the previous attempt saved the document after all."""
     run = db.session.get(BatchRun, run_id)
     try:
+        run.notice = None
+        run.cancel_requested = False
         configs = user_configs(run.user_id)
         todo = sum(1 for f in run.files if not f.error for s in f.steps if s.status in RETRYABLE_STATUSES)
-        add_log(run, 'info', f'Run started: {todo} document(s) to create')
+        add_log(run, 'info', f'Run started: {todo} document(s) to create. Checking database connections…')
         db.session.commit()
 
+        problems = check_databases(run, configs, service_for, sleep)
+        if problems:
+            names = ', '.join(problems)
+            run.notice = (f'Nothing was created: could not connect to {names}. Check the connection on the Databases '
+                          f'page, or untick the steps that use it, then start again.')
+            created_before = any(s.status == 'success' for f in run.files for s in f.steps)
+            run.status = 'completed_with_errors' if created_before else 'draft'
+            run.finished_at = datetime.utcnow()
+            add_log(run, 'error', run.notice, details=problems)
+            db.session.commit()
+            return
+
+        down: Dict[int, str] = {}
+        cancelled = False
         for run_file in run.files:
-            if run_file.error:
+            if run_file.error or cancelled:
                 continue
             rows = json.loads(run_file.rows_json or '[]')
             steps_by_key = {s.step_key: s for s in run_file.steps}
             for step in run_file.steps:
                 if step.status not in RETRYABLE_STATUSES:
                     continue
-                _run_one_step(run, run_file, step, rows, steps_by_key, configs, service_for)
+                if _cancel_requested(run):
+                    cancelled = True
+                    break
+                _run_one_step(run, run_file, step, rows, steps_by_key, configs, service_for, down, sleep)
 
         all_steps = [s for f in run.files if not f.error for s in f.steps if s.status != 'excluded']
-        ok = all(s.status == 'success' for s in all_steps)
-        run.status = 'completed' if ok else 'completed_with_errors'
-        run.finished_at = datetime.utcnow()
         created = sum(1 for s in all_steps if s.status == 'success')
-        add_log(run, 'info' if ok else 'warning',
-                f'Run finished: {created} of {len(all_steps)} document(s) created')
+        run.finished_at = datetime.utcnow()
+        if cancelled:
+            run.status = 'cancelled'
+            add_log(run, 'warning', f'Run cancelled: {created} of {len(all_steps)} document(s) created; '
+                                    f'the rest can be started again')
+        else:
+            ok = created == len(all_steps)
+            run.status = 'completed' if ok else 'completed_with_errors'
+            add_log(run, 'info' if ok else 'warning', f'Run finished: {created} of {len(all_steps)} document(s) created')
         db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -363,68 +485,128 @@ def execute_run(run_id: int, service_for: ServiceFactory = DatabaseService):
             for step in run_file.steps:
                 if step.status == 'running':
                     step.status = 'interrupted'
-                    step.message = 'The run stopped while this step was running. Check the database to see whether it was created.'
+                    step.message = ('The run stopped while this step was running. Retrying checks the database '
+                                    'first, so it will not be created twice.')
         run.status = 'interrupted'
         run.finished_at = datetime.utcnow()
         add_log(run, 'error', f'Run stopped unexpectedly: {e}', details=traceback.format_exc())
         db.session.commit()
 
 
-def _run_one_step(run, run_file, step, rows, steps_by_key, configs, service_for):
+def _fail_step(run, step, where, message, details=None, level='error'):
+    step.status = 'failed'
+    step.message = message
+    add_log(run, level, f'{where}: {message}', step=step, details=details)
+
+
+def _run_one_step(run, run_file, step, rows, steps_by_key, configs, service_for, down, sleep):
     where = f'{run_file.filename} › {step_title(step)}'
     if step.type == 'copy':
         source = steps_by_key.get(step.source_step_key)
         if source is None or source.status != 'success':
             step.status = 'blocked'
-            step.message = 'Skipped: the invoice it copies was not created'
+            step.message = 'Not run: the invoice it copies was not created'
             add_log(run, 'warning', f'{where}: {step.message}', step=step)
             db.session.commit()
             return
 
+    unreachable = [down[i] for i in _step_databases(step, steps_by_key) if i in down]
+    if unreachable:
+        _fail_step(run, step, where, f'Not attempted: {unreachable[0]}', level='warning')
+        db.session.commit()
+        return
+
+    preview = json.loads(step.preview_json or '{}')
     step.status = 'running'
     step.started_at = datetime.utcnow()
     step.message = None
     db.session.commit()
 
+    def remember_attempt(number, total):
+        step.attempted_number = number
+        step.attempted_total = total
+        db.session.commit()
+
     try:
-        number, doc_id, summary = _execute_step(step, rows, steps_by_key, configs, service_for)
-        step.status = 'success'
-        step.doc_number = number
-        step.doc_id = doc_id
-        step.preview_json = json.dumps(summary, default=str)
-        step.message = f"Created {'PO' if step.type == 'po' else 'invoice'} #{number}"
-        add_log(run, 'info', f'{where}: {step.message} for {step.party_label or summary["party_name"]} '
-                             f'({summary["lines"]} lines, total {summary["total"]:.2f})', step=step)
-        if summary['products_added']:
-            add_log(run, 'info', f'{where}: added {summary["products_added"]} missing product(s) to {step.database_name}',
-                    step=step)
-        if summary['missing_upcs']:
-            add_log(run, 'warning', f'{where}: {len(summary["missing_upcs"])} UPC(s) not found, lines skipped',
-                    step=step, details=[m['upc'] for m in summary['missing_upcs']])
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            step.attempts = (step.attempts or 0) + 1
+            try:
+                number, doc_id, summary = _execute_step(step, rows, steps_by_key, configs, service_for, remember_attempt)
+                break
+            except StepError as e:
+                if not e.transient or attempt == MAX_ATTEMPTS:
+                    raise
+                delay = RETRY_DELAYS[attempt - 1]
+                step.message = f'Attempt {attempt} of {MAX_ATTEMPTS} hit a temporary error; retrying in {delay}s'
+                add_log(run, 'warning', f'{where}: attempt {attempt} failed with a temporary error, '
+                                        f'retrying in {delay}s: {e}', step=step)
+                db.session.commit()
+                sleep(delay)
     except StepError as e:
-        step.status = 'failed'
-        step.message = str(e)
-        add_log(run, 'error', f'{where}: {e}', step=step, details=e.details or None)
-    except Exception as e:
-        step.status = 'failed'
-        step.message = f'Unexpected error: {e}'
-        add_log(run, 'error', f'{where}: unexpected error: {e}', step=step, details=traceback.format_exc())
-    finally:
+        _fail_step(run, step, where, str(e), details=e.details or None)
+        if e.transient:
+            for config_id in _step_databases(step, steps_by_key):
+                config = configs.get(config_id)
+                ok, message = service_for(config).test_connection() if config else (False, 'deleted')
+                if not ok:
+                    down[config_id] = f'{config.name if config else "the database"} stopped responding during this run'
+                    add_log(run, 'error', f'{down[config_id]}; its remaining steps are not attempted', details=message)
         step.finished_at = datetime.utcnow()
         db.session.commit()
+        return
+    except Exception as e:
+        _fail_step(run, step, where, f'Unexpected error: {e}', details=traceback.format_exc())
+        step.finished_at = datetime.utcnow()
+        db.session.commit()
+        return
+
+    kind = 'PO' if step.type == 'po' else 'invoice'
+    if preview.get('lines') is not None and 'error' not in preview and step.doc_number is None:
+        summary['preview'] = {'lines': preview.get('lines'), 'total': preview.get('total')}
+    step.status = 'success'
+    step.doc_number = number
+    step.doc_id = doc_id
+    step.finished_at = datetime.utcnow()
+    if summary.get('recovered'):
+        step.message = f'{kind.capitalize()} #{number} was already saved by an earlier attempt; not created again'
+        add_log(run, 'warning', f'{where}: {step.message}', step=step)
+    else:
+        step.message = f'Created {kind} #{number}'
+        add_log(run, 'info', f'{where}: {step.message} for {step.party_label or summary.get("party_name")} '
+                             f'({summary.get("lines")} lines, total {float(summary.get("total") or 0):.2f})', step=step)
+    if summary.get('products_added') and not summary.get('recovered'):
+        add_log(run, 'info', f'{where}: added {summary["products_added"]} missing product(s) to {step.database_name}',
+                step=step)
+    if summary.get('missing_upcs') and not summary.get('recovered'):
+        add_log(run, 'warning', f'{where}: {len(summary["missing_upcs"])} UPC(s) not found, lines skipped',
+                step=step, details=[m['upc'] for m in summary['missing_upcs']])
+
+    try:
+        same_number = find_documents(step.type, service_for(configs[step.database_config_id]), number)
+        if len(same_number) > 1:
+            summary['duplicate_number'] = len(same_number)
+            add_log(run, 'warning', f'{where}: {len(same_number)} {kind}s now have number #{number} in '
+                                    f'{step.database_name}. Someone may have created one at the same time; '
+                                    f'check the numbering.', step=step)
+    except Exception as e:
+        add_log(run, 'warning', f'{where}: could not check #{number} for duplicates: {e}', step=step)
+
+    step.preview_json = json.dumps(summary, default=str)
+    db.session.commit()
 
 
 def recover_interrupted_runs():
-    """Runs left 'running' by a server restart can never finish; mark them so they can be checked and retried."""
+    """Runs left 'running' by a server restart can never finish; mark them so they can be retried safely."""
     for run in BatchRun.query.filter_by(status='running').all():
         for run_file in run.files:
             for step in run_file.steps:
                 if step.status == 'running':
                     step.status = 'interrupted'
-                    step.message = 'The server stopped while this step was running. Check the database to see whether it was created.'
+                    step.message = ('The server stopped while this step was running. Retrying checks the '
+                                    'database first, so it will not be created twice.')
         run.status = 'interrupted'
         run.finished_at = datetime.utcnow()
-        add_log(run, 'error', 'The server restarted during this run; remaining steps can be retried')
+        add_log(run, 'error', 'The server restarted during this run; the remaining steps can be started again')
     db.session.commit()
 
 
@@ -455,6 +637,8 @@ def serialize_run(run: BatchRun, include_files: bool = True, include_logs: bool 
         'created_at': _iso(run.created_at),
         'started_at': _iso(run.started_at),
         'finished_at': _iso(run.finished_at),
+        'notice': run.notice,
+        'cancel_requested': bool(run.cancel_requested),
         'file_count': len(run.files),
         'file_errors': sum(1 for f in run.files if f.error),
         'counts': counts,
@@ -487,6 +671,7 @@ def serialize_run(run: BatchRun, include_files: bool = True, include_logs: bool 
                 'preview': json.loads(s.preview_json or '{}'),
                 'projected_number': projected.get(s.id),
                 'doc_number': s.doc_number,
+                'attempts': s.attempts or 0,
                 'message': s.message,
                 'finished_at': _iso(s.finished_at),
             } for s in f.steps],

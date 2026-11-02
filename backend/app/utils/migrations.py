@@ -14,6 +14,8 @@ def run_migrations():
         add_connection_security_columns()
         # Migration 2: Update ODBC Driver 17 to Driver 18
         migrate_odbc_driver_v17_to_v18()
+        # Migration 3: Retry / cancel columns for monthly runs
+        add_batch_run_columns()
         print("All migrations completed")
         
     except Exception as e:
@@ -97,3 +99,25 @@ def add_connection_security_columns():
     except Exception as e:
         logger.error(f"Failed to add connection security columns: {e}")
         raise e
+
+def add_batch_run_columns():
+    """Columns added to the monthly run tables after their first release"""
+    wanted = {
+        'batch_runs': [
+            ('cancel_requested', 'BOOLEAN DEFAULT 0'),
+            ('notice', 'TEXT'),
+        ],
+        'batch_run_steps': [
+            ('attempted_number', 'VARCHAR(50)'),
+            ('attempted_total', 'FLOAT'),
+            ('attempts', 'INTEGER DEFAULT 0'),
+        ],
+    }
+    with db.engine.connect() as conn:
+        for table, columns in wanted.items():
+            existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            for name, ddl in columns:
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    conn.commit()
+                    logger.info(f"Added {table}.{name}")
