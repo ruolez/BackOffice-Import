@@ -13,7 +13,8 @@ const BATCH_STATUS = {
     success: { label: 'Created', cls: 'success', icon: 'fa-check' },
     failed: { label: 'Failed', cls: 'danger', icon: 'fa-xmark' },
     blocked: { label: 'Not run', cls: 'warning', icon: 'fa-link-slash' },
-    interrupted: { label: 'Interrupted', cls: 'warning', icon: 'fa-triangle-exclamation' }
+    interrupted: { label: 'Interrupted', cls: 'warning', icon: 'fa-triangle-exclamation' },
+    held: { label: 'On hold', cls: 'info', icon: 'fa-pause' }
 };
 
 const RUN_STATUS = {
@@ -22,13 +23,15 @@ const RUN_STATUS = {
     completed: { label: 'Completed', cls: 'success' },
     completed_with_errors: { label: 'Completed with errors', cls: 'warning' },
     cancelled: { label: 'Cancelled', cls: 'warning' },
+    on_hold: { label: 'Waiting for later', cls: 'info' },
     interrupted: { label: 'Interrupted', cls: 'danger' }
 };
 
 const RETRYABLE = ['pending', 'failed', 'blocked', 'interrupted'];
 const TOGGLEABLE = ['pending', 'failed', 'blocked', 'excluded'];
-const EXECUTABLE_RUNS = ['draft', 'completed_with_errors', 'cancelled', 'interrupted'];
-const FINISHED_RUNS = ['completed', 'completed_with_errors', 'cancelled', 'interrupted'];
+const HOLDABLE = ['pending', 'failed', 'blocked', 'excluded'];
+const EXECUTABLE_RUNS = ['draft', 'completed_with_errors', 'on_hold', 'cancelled', 'interrupted'];
+const FINISHED_RUNS = ['completed', 'completed_with_errors', 'on_hold', 'cancelled', 'interrupted'];
 
 const esc = (value) => utils.escapeHtml(String(value ?? ''));
 const money = (value) => utils.formatCurrency(Number(value || 0));
@@ -43,8 +46,9 @@ function runSteps(run) {
 }
 
 // Renders a run's files and steps. Used by Monthly Run (editable) and Run History (read only).
-function renderBatchFiles(run, { editable, rules }) {
-    const canToggle = EXECUTABLE_RUNS.includes(run.status);
+// editable: files and rules can be changed (draft only). interactive: steps can be ticked, held and re-checked.
+function renderBatchFiles(run, { editable, interactive = false, rules }) {
+    const canToggle = interactive && EXECUTABLE_RUNS.includes(run.status);
     return run.files.map(file => {
         const ruleControl = editable
             ? `<select class="form-select form-select-sm batch-rule-select" data-file-id="${file.id}" ${file.error ? 'disabled' : ''}>
@@ -69,6 +73,7 @@ function renderBatchFiles(run, { editable, rules }) {
                         <div class="text-muted small">${file.error ? 'Not readable' : `${file.row_count} row(s)`}</div>
                     </div>
                     <div class="batch-file-rule">${ruleControl}</div>
+                    ${canToggle && file.steps.length ? `<button class="btn btn-sm btn-outline-secondary batch-recheck-file" data-file-id="${file.id}" title="Check this file against the databases again"><i class="fas fa-rotate-right me-1"></i>Re-check</button>` : ''}
                     ${editable ? `<button class="icon-btn batch-remove-file" data-file-id="${file.id}" title="Remove file" aria-label="Remove file"><i class="fas fa-trash"></i></button>` : ''}
                 </div>
                 ${error}${warnings}${noRule}
@@ -103,6 +108,9 @@ function renderBatchSteps(file, canToggle) {
                     </ul>
                 </details>`);
         }
+        if (step.status === 'held' && (p.error || p.missing_upcs?.length)) {
+            issues.push(`<div class="batch-issue text-muted">Fix it in BackOffice, press Re-check, then Resume and create</div>`);
+        }
         if (p.recovered) {
             issues.push(`<div class="batch-issue text-info">Saved by an earlier attempt. Checked in the database, not created twice</div>`);
         } else if (step.status === 'success' && step.attempts > 1) {
@@ -128,7 +136,13 @@ function renderBatchSteps(file, canToggle) {
                 <td class="text-nowrap">${number}</td>
                 <td class="text-end text-nowrap">${p.lines != null ? p.lines : '—'}</td>
                 <td class="text-end text-nowrap">${p.total != null ? money(p.total) : '—'}</td>
-                <td class="text-end">${statusPill(BATCH_STATUS, step.status)}</td>
+                <td class="text-end">
+                    ${statusPill(BATCH_STATUS, step.status)}
+                    ${canToggle && HOLDABLE.includes(step.status)
+                        ? `<button type="button" class="btn btn-link btn-sm batch-step-hold" data-step-id="${step.id}" data-hold="1"><i class="fas fa-pause me-1"></i>Hold for later</button>` : ''}
+                    ${canToggle && step.status === 'held'
+                        ? `<button type="button" class="btn btn-link btn-sm batch-step-hold" data-step-id="${step.id}" data-hold="0"><i class="fas fa-play me-1"></i>Resume</button>` : ''}
+                </td>
             </tr>`;
     }).join('');
 
@@ -477,8 +491,9 @@ class MonthlyRunManager {
         const container = document.getElementById('batch-run-content');
         try {
             await batchRulesManager.fetchRules();
+            const { runs } = await api.getBatchRuns();
+            this.waiting = runs.filter(r => r.counts.held && r.status !== 'running');
             if (!this.run || this.run.status === 'draft') {
-                const { runs } = await api.getBatchRuns();
                 const active = runs.find(r => r.status === 'running') || runs.find(r => r.status === 'draft');
                 this.run = active ? (await api.getBatchRun(active.id)).run : null;
             } else {
@@ -494,6 +509,32 @@ class MonthlyRunManager {
     async openRun(runId) {
         this.run = (await api.getBatchRun(runId)).run;
         document.getElementById('batch-run-tab').click();
+    }
+
+    async show(runId) {
+        try {
+            this.run = (await api.getBatchRun(runId)).run;
+            this.render();
+            document.querySelector('.main')?.scrollTo?.(0, 0);
+            window.scrollTo(0, 0);
+        } catch (error) {
+            authManager.showAlert('Failed to open run: ' + error.message, 'danger');
+        }
+    }
+
+    renderWaiting() {
+        const others = (this.waiting || []).filter(r => r.id !== this.run?.id);
+        if (!others.length) return '';
+        return `
+            <div class="batch-waiting mb-3">
+                <div class="fw-semibold mb-2"><i class="fas fa-pause me-2"></i>Waiting for later</div>
+                ${others.map(r => `
+                    <div class="batch-waiting-row">
+                        <span>Run #${r.id} · ${utils.formatDateTime(r.started_at || r.created_at)} ·
+                            <strong>${r.counts.held}</strong> document(s) on hold</span>
+                        <button class="btn btn-sm btn-outline-primary" data-open-waiting="${r.id}">Open</button>
+                    </div>`).join('')}
+            </div>`;
     }
 
     render() {
@@ -529,10 +570,11 @@ class MonthlyRunManager {
             </div>` : '';
 
         container.innerHTML = `
+            ${this.renderWaiting()}
             ${notice}
             ${run && !isDraft ? this.renderResultBanner(run) : ''}
             ${dropZone}
-            ${run?.files.length ? renderBatchFiles(run, { editable: isDraft, rules }) : ''}
+            ${run?.files.length ? renderBatchFiles(run, { editable: isDraft, interactive: true, rules }) : ''}
             ${run?.files.length ? this.renderActionBar(run) : ''}`;
 
         this.bind();
@@ -542,6 +584,8 @@ class MonthlyRunManager {
         const steps = runSteps(run).filter(s => s.status !== 'excluded');
         const created = steps.filter(s => s.status === 'success').length;
         const problems = steps.filter(s => ['failed', 'blocked', 'interrupted'].includes(s.status)).length;
+        const held = steps.filter(s => s.status === 'held').length;
+        const heldText = held ? ` ${held} on hold for later: fix the issue, press Re-check, then Resume.` : '';
         const when = run.started_at ? utils.formatDateTime(run.started_at) : '';
         let text;
         if (run.status === 'running') {
@@ -551,7 +595,9 @@ class MonthlyRunManager {
         } else if (run.status === 'cancelled') {
             text = `Cancelled. ${created} of ${steps.length} documents were created; the rest can be started again.`;
         } else if (problems) {
-            text = `${created} of ${steps.length} documents created. ${problems} need attention. Read the messages below.`;
+            text = `${created} of ${steps.length} documents created. ${problems} need attention. Read the messages below.${heldText}`;
+        } else if (held) {
+            text = `${created} of ${steps.length} documents created.${heldText}`;
         } else {
             text = `All ${created} documents were created.`;
         }
@@ -574,17 +620,20 @@ class MonthlyRunManager {
         const todo = steps.filter(s => RETRYABLE.includes(s.status));
         const blockedCopies = todo.filter(s => s.type === 'copy' && steps.find(x => x.key === s.source_step_key && x.status === 'excluded')).length;
         const skipped = steps.filter(s => s.status === 'excluded').length;
+        const held = steps.filter(s => s.status === 'held').length;
         const issues = steps.filter(s => s.status !== 'success' && (s.preview?.error || s.preview?.missing_upcs?.length)).length;
         const unassigned = run.files.filter(f => !f.error && !f.rule_id).length;
 
         const parts = [`${run.files.length} file(s)`, `<strong>${todo.length}</strong> document(s) to create`];
         if (skipped) parts.push(`${skipped} skipped`);
+        if (held) parts.push(`<span class="text-info">${held} on hold</span>`);
         if (issues) parts.push(`<span class="text-warning">${issues} with warnings</span>`);
         if (unassigned) parts.push(`<span class="text-danger">${unassigned} file(s) without a rule</span>`);
 
         const isDraft = run.status === 'draft';
         const canRun = EXECUTABLE_RUNS.includes(run.status) && todo.length > 0;
-        const runLabel = isDraft ? `Create ${todo.length} document(s)` : `Retry ${todo.length} remaining`;
+        const runLabel = isDraft ? `Create ${todo.length} document(s)` : `Create ${todo.length} remaining`;
+        const canRecheck = EXECUTABLE_RUNS.includes(run.status) && steps.some(s => s.status !== 'success');
 
         return `
             <div class="batch-action-bar">
@@ -592,6 +641,7 @@ class MonthlyRunManager {
                     ${blockedCopies ? `<div class="small text-warning">${blockedCopies} copy step(s) will not run because their invoice is skipped</div>` : ''}
                 </div>
                 <div class="d-flex flex-wrap gap-2">
+                    ${canRecheck ? `<button class="btn btn-outline-secondary" id="batchRecheckBtn" title="Check everything not yet created against the databases again"><i class="fas fa-rotate-right me-2"></i>Re-check all</button>` : ''}
                     ${!isDraft ? `<button class="btn btn-outline-secondary" id="batchLogBtn"><i class="fas fa-file-lines me-2"></i>Download log</button>` : ''}
                     ${isDraft ? `<button class="btn btn-outline-secondary" id="batchDiscardBtn">Discard</button>` : ''}
                     ${!isDraft && run.status !== 'running' ? `<button class="btn btn-outline-secondary" id="batchNewBtn"><i class="fas fa-plus me-2"></i>New run</button>` : ''}
@@ -621,13 +671,43 @@ class MonthlyRunManager {
             this.update(() => api.removeBatchRunFile(this.run.id, Number(btn.dataset.fileId)))));
         document.querySelectorAll('.batch-step-toggle').forEach(box => box.addEventListener('change', () =>
             this.update(() => api.setBatchStepIncluded(this.run.id, Number(box.dataset.stepId), box.checked))));
+        document.querySelectorAll('.batch-step-hold').forEach(btn => btn.addEventListener('click', () =>
+            this.update(() => api.setBatchStepHold(this.run.id, Number(btn.dataset.stepId), btn.dataset.hold === '1'))));
+        document.querySelectorAll('.batch-recheck-file').forEach(btn => btn.addEventListener('click', () =>
+            this.recheck(Number(btn.dataset.fileId))));
+        document.getElementById('batchRecheckBtn')?.addEventListener('click', () => this.recheck(null));
+        document.querySelectorAll('[data-open-waiting]').forEach(btn => btn.addEventListener('click', () =>
+            this.show(Number(btn.dataset.openWaiting))));
 
         document.getElementById('batchExecuteBtn')?.addEventListener('click', () => this.execute());
         document.getElementById('batchDiscardBtn')?.addEventListener('click', () => this.discard());
-        document.getElementById('batchNewBtn')?.addEventListener('click', () => { this.run = null; this.render(); });
+        document.getElementById('batchNewBtn')?.addEventListener('click', async () => {
+            this.run = null;
+            await this.open();
+        });
         document.getElementById('batchLogBtn')?.addEventListener('click', () => downloadRunLog(this.run.id));
         document.getElementById('batchReportBtn')?.addEventListener('click', () => batchHistoryManager.openReport(this.run.id));
         document.getElementById('batchCancelBtn')?.addEventListener('click', () => this.cancel());
+    }
+
+    async recheck(fileId) {
+        const issues = () => runSteps(this.run).filter(s => s.status !== 'success' && (s.preview?.error || s.preview?.missing_upcs?.length)).length;
+        const before = issues();
+        try {
+            authManager.showLoading(true);
+            const response = await api.recheckBatchRun(this.run.id, fileId);
+            this.run = response.run;
+            const after = issues();
+            const fixed = before - after;
+            authManager.showAlert(
+                `Re-checked ${response.checked} document(s). ${fixed > 0 ? `${fixed} problem(s) fixed. ` : ''}${after ? `${after} still need attention.` : 'No problems left.'}`,
+                after ? 'warning' : 'success');
+        } catch (error) {
+            authManager.showAlert('Re-check failed: ' + error.message, 'danger');
+        } finally {
+            authManager.showLoading(false);
+            this.render();
+        }
     }
 
     async cancel() {
@@ -776,7 +856,7 @@ class BatchHistoryManager {
                             return `<tr data-run="${r.id}">
                                 <td><strong>#${r.id}</strong></td>
                                 <td>${utils.formatDateTime(r.started_at || r.created_at)}</td>
-                                <td>${statusPill(RUN_STATUS, r.status)}</td>
+                                <td>${statusPill(RUN_STATUS, r.status)}${c.held ? ` <span class="text-muted small">${c.held} on hold</span>` : ''}</td>
                                 <td>${r.file_count}</td>
                                 <td>${c.success || 0}</td>
                                 <td>${problems ? `<span class="text-danger">${problems}</span>` : '0'}</td>
@@ -819,7 +899,7 @@ class BatchHistoryManager {
                         ${canContinue ? `<button class="btn btn-primary" id="historyOpen"><i class="fas fa-bolt me-2"></i>Open in Monthly Run</button>` : ''}
                     </div>
                 </div>
-                ${renderBatchFiles(run, { editable: false, rules: [] })}
+                ${renderBatchFiles(run, { editable: false, interactive: false, rules: [] })}
                 <div class="card mt-3">
                     <div class="card-body">
                         <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
@@ -873,6 +953,7 @@ Object.assign(BatchHistoryManager.prototype, {
                 <div class="report-kpi-label">${label}</div>
                 <div class="report-kpi-value">${count}</div>
                 ${total != null ? `<div class="report-kpi-sub">${money(total)}</div>` : ''}
+                ${label === 'Not created' && report.on_hold ? `<div class="report-kpi-sub">${report.on_hold} on hold for later</div>` : ''}
             </div>`;
         const notes = (d) => d.notes.length ? d.notes.map(n => `<div class="small text-muted">${esc(n)}</div>`).join('') : '';
 
@@ -963,7 +1044,7 @@ Object.assign(BatchHistoryManager.prototype, {
                     ${kpi('Invoices', t.invoice.count, t.invoice.total)}
                     ${kpi('Invoice copies', t.copy.count, t.copy.total)}
                     ${kpi('Purchase orders', t.po.count, t.po.total)}
-                    ${kpi('Not created', report.not_created.length, null, report.not_created.length ? 'is-problem' : '')}
+                    ${kpi('Not created', report.not_created.length, null, report.not_created.length > report.on_hold ? 'is-problem' : '')}
                 </div>
                 ${notCreated}
                 ${byDatabase || '<p class="text-muted">No documents were created.</p>'}

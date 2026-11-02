@@ -462,3 +462,85 @@ class TestRunReport:
         assert workbook.sheetnames == ['Summary', 'Documents', 'Not created', 'Skipped UPCs']
         assert [(r[0], r[1], r[2]) for r in rows] == [
             ('DB-A', 'Invoice', '500'), ('DB-A', 'Purchase order', '70'), ('DB-B', 'Invoice copy', '90')]
+
+
+class TestFinishedRunStatus:
+    @pytest.mark.parametrize('statuses, expected', [
+        (['success', 'success'], 'completed'),
+        (['success', 'held'], 'on_hold'),
+        (['success', 'held', 'failed'], 'completed_with_errors'),
+        (['success', 'blocked'], 'completed_with_errors'),
+        ([], 'completed'),
+    ])
+    def test_held_documents_leave_the_run_waiting_and_failures_win(self, statuses, expected):
+        assert batch.finished_run_status(statuses) == expected
+
+
+class TestHoldForLater:
+    def test_holding_an_invoice_holds_its_copy_and_the_rest_is_created(self, setup):
+        changed = batch.set_step_hold(setup['file'].steps[0], True)
+        db.session.commit()
+
+        run_now(setup)
+
+        assert [s.step_key for s in changed] == ['inv', 'cp']
+        assert statuses(setup['file']) == [('inv', 'held', None), ('cp', 'held', None), ('po', 'success', '70')]
+        assert setup['run'].status == 'on_hold'
+
+    def test_released_documents_are_created_in_a_later_run_without_touching_the_rest(self, setup):
+        batch.set_step_hold(setup['file'].steps[0], True)
+        db.session.commit()
+        run_now(setup)
+
+        batch.set_step_hold(setup['file'].steps[0], False)
+        db.session.commit()
+        run_now(setup)
+
+        assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'success', '90'), ('po', 'success', '70')]
+        assert (setup['run'].status, len(setup['fakes'][setup['a']].pos)) == ('completed', 1)
+
+    def test_report_lists_held_documents_as_on_hold(self, setup):
+        batch.set_step_hold(setup['file'].steps[2], True)
+        db.session.commit()
+        run_now(setup)
+
+        report = build_run_report(batch.serialize_run(setup['run']))
+
+        assert ([(p['document'], p['status'], p['reason']) for p in report['not_created']], report['on_hold']) == (
+            [('Purchase order', 'On hold', 'Put on hold for later')], 1)
+
+
+class TestRecheck:
+    def test_recheck_picks_up_a_product_added_after_the_preview(self, setup):
+        setup['fakes'][setup['a']].items['999'] = make_item('999', 9)
+
+        batch.preview_file(setup['file'], batch.user_configs(setup['run'].user_id), setup['service_for'])
+
+        previews = [json.loads(s.preview_json) for s in setup['file'].steps]
+        assert [(p['lines'], p['missing_upcs']) for p in previews] == [(3, []), (3, []), (3, [])]
+
+    def test_recheck_ticks_again_a_step_that_was_unticked_only_because_it_failed(self, setup):
+        fakes, configs = setup['fakes'], batch.user_configs(setup['run'].user_id)
+        del fakes[setup['a']].customers[5]
+        batch.preview_file(setup['file'], configs, setup['service_for'])
+        setup['file'].steps[2].status = 'excluded'
+        assert [s.status for s in setup['file'].steps] == ['excluded', 'excluded', 'excluded']
+
+        fakes[setup['a']].customers[5] = CUSTOMER_A
+        batch.preview_file(setup['file'], configs, setup['service_for'])
+
+        assert [(s.status, s.message) for s in setup['file'].steps] == [
+            ('pending', None), ('pending', None), ('excluded', None)]
+
+    def test_recheck_after_a_run_keeps_created_documents_and_uses_them_for_copies(self, setup):
+        fake_b = setup['fakes'][setup['b']]
+        del fake_b.customers[8]
+        run_now(setup)
+        assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'failed', None), ('po', 'success', '70')]
+
+        fake_b.customers[8] = CUSTOMER_B
+        checked = batch.preview_file(setup['file'], batch.user_configs(setup['run'].user_id), setup['service_for'])
+
+        copy_preview = json.loads(setup['file'].steps[1].preview_json)
+        assert (checked, copy_preview['lines'], copy_preview['total'], copy_preview['products_added']) == (1, 2, 14.0, 1)
+        assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'failed', None), ('po', 'success', '70')]

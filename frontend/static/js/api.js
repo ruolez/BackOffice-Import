@@ -292,6 +292,20 @@ class ApiService {
         });
     }
 
+    async setBatchStepHold(runId, stepId, hold) {
+        return this.request(`/batch/runs/${runId}/steps/${stepId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ hold })
+        });
+    }
+
+    async recheckBatchRun(runId, fileId = null) {
+        return this.request(`/batch/runs/${runId}/recheck`, {
+            method: 'POST',
+            body: JSON.stringify(fileId ? { file_id: fileId } : {})
+        });
+    }
+
     async executeBatchRun(runId) {
         return this.request(`/batch/runs/${runId}/execute`, { method: 'POST' });
     }

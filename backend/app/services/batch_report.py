@@ -17,6 +17,7 @@ NOT_CREATED_LABELS = {
     'interrupted': 'Interrupted',
     'pending': 'Not started',
     'running': 'Running',
+    'held': 'On hold',
 }
 
 
@@ -94,7 +95,8 @@ def build_run_report(run: Dict[str, Any]) -> Dict[str, Any]:
                     'database': s['database_name'],
                     'party': party,
                     'status': NOT_CREATED_LABELS.get(s['status'], s['status']),
-                    'reason': s.get('message') or p.get('error') or ('Unticked before the run' if s['status'] == 'excluded' else ''),
+                    'reason': s.get('message') or p.get('error') or {
+                        'excluded': 'Unticked before the run', 'held': 'Put on hold for later'}.get(s['status'], ''),
                 })
         by_file.append({'file': f['filename'], 'rule': f.get('rule_name') or '', 'documents': file_docs,
                         'problems': file_problems})
@@ -128,6 +130,7 @@ def build_run_report(run: Dict[str, Any]) -> Dict[str, Any]:
         'by_database': by_database,
         'by_file': by_file,
         'not_created': not_created,
+        'on_hold': sum(1 for p in not_created if p['status'] == 'On hold'),
         'skipped_upcs': skipped_upcs,
     }
 

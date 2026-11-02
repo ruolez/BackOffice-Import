@@ -1756,6 +1756,24 @@ html[data-bs-theme="dark"] .segmented .nav-link.active { background: var(--surfa
     .batch-file-rule { width: 100%; max-width: none; order: 3; }
 }
 
+.batch-file-head .batch-recheck-file { white-space: nowrap; }
+.batch-steps .batch-step-hold { display: block; margin-left: auto; padding: 2px 0 0; font-size: 0.75rem; text-decoration: none; }
+.batch-waiting {
+    padding: 14px 16px;
+    border: 1px solid var(--info-border);
+    background: var(--info-soft);
+    border-radius: var(--radius-lg);
+}
+.batch-waiting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-top: 1px solid var(--info-border);
+}
+.batch-waiting-row:first-of-type { border-top: 0; }
+
 /* Monthly run report */
 .batch-banner { display: flex; align-items: center; gap: 12px; }
 

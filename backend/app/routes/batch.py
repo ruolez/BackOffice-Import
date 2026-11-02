@@ -306,7 +306,17 @@ def set_step_included(run_id, step_id):
     if not step:
         return jsonify({'error': 'Step not found'}), 404
 
-    included = bool((request.get_json() or {}).get('included'))
+    data = request.get_json() or {}
+    if 'hold' in data:
+        changed = batch.set_step_hold(step, bool(data['hold']))
+        if changed:
+            what = ', '.join(batch.step_title(s) for s in changed)
+            batch.add_log(run, 'info', f"{step.run_file.filename} › {what}: "
+                                       f"{'put on hold for later' if data['hold'] else 'taken off hold'}", step=step)
+        db.session.commit()
+        return jsonify({'success': True, 'run': batch.serialize_run(run)}), 200
+
+    included = bool(data.get('included'))
     if included and step.status == 'excluded':
         step.status = 'pending'
     elif not included and step.status == 'interrupted':
@@ -315,6 +325,26 @@ def set_step_included(run_id, step_id):
         step.status = 'excluded'
     db.session.commit()
     return jsonify({'success': True, 'run': batch.serialize_run(run)}), 200
+
+
+@bp.route('/runs/<int:run_id>/recheck', methods=['POST'])
+@login_required
+def recheck_run(run_id):
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    if run.status == 'running':
+        return jsonify({'error': 'The run is in progress'}), 409
+    file_id = (request.get_json(silent=True) or {}).get('file_id')
+    configs = batch.user_configs(current_user.id)
+    checked = 0
+    for run_file in run.files:
+        if run_file.error or not run_file.steps or (file_id and run_file.id != file_id):
+            continue
+        checked += batch.preview_file(run_file, configs)
+    batch.add_log(run, 'info', f'Re-checked {checked} document(s) against the databases')
+    db.session.commit()
+    return jsonify({'success': True, 'checked': checked, 'run': batch.serialize_run(run)}), 200
 
 
 @bp.route('/runs/<int:run_id>/execute', methods=['POST'])

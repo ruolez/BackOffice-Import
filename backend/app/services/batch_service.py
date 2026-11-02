@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 STEP_TYPES = ('invoice', 'po', 'copy')
 STEP_LABELS = {'invoice': 'Invoice', 'po': 'Purchase order', 'copy': 'Copy invoice'}
 RETRYABLE_STATUSES = ('pending', 'failed', 'blocked', 'interrupted')
-EXECUTABLE_RUN_STATUSES = ('draft', 'completed_with_errors', 'cancelled', 'interrupted')
+EXECUTABLE_RUN_STATUSES = ('draft', 'completed_with_errors', 'on_hold', 'cancelled', 'interrupted')
 
 MAX_ATTEMPTS = 3
 RETRY_DELAYS = (3, 10)  # seconds to wait before attempt 2 and 3
@@ -245,22 +245,16 @@ def user_configs(user_id: int) -> Dict[int, DatabaseConfig]:
 
 def plan_file(run_file: BatchRunFile, rule: BatchRule, configs: Dict[int, DatabaseConfig],
               service_for: ServiceFactory = DatabaseService):
-    """(Re)build the file's steps from its rule and dry-run each one. Nothing is written to SQL Server.
-    A step whose preview fails starts excluded, so it only runs if the user ticks it back on."""
-    run = run_file.run
+    """(Re)build the file's steps from its rule and dry-run each one. Nothing is written to SQL Server."""
     for old in list(run_file.steps):
         run_file.steps.remove(old)
     db.session.flush()
 
     run_file.rule_id = rule.id
     run_file.rule_name = rule.name
-    rows = json.loads(run_file.rows_json or '[]')
-    documents: Dict[str, Dict[str, Any]] = {}
-    steps_by_key: Dict[str, BatchRunStep] = {}
-
     for position, spec in enumerate(json.loads(rule.steps_json or '[]')):
         config = configs.get(spec.get('database_config_id'))
-        step = BatchRunStep(
+        run_file.steps.append(BatchRunStep(
             run_id=run_file.run_id,
             position=position,
             step_key=spec['id'],
@@ -271,24 +265,39 @@ def plan_file(run_file: BatchRunFile, rule: BatchRule, configs: Dict[int, Databa
             party_label=spec.get('party_label'),
             source_step_key=spec.get('source_step_id'),
             status='pending',
-        )
-        run_file.steps.append(step)
-        steps_by_key[step.step_key] = step
-        db.session.flush()
+        ))
+    db.session.flush()
+    preview_file(run_file, configs, service_for)
 
+
+def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
+                 service_for: ServiceFactory = DatabaseService) -> int:
+    """Dry-run every step of the file that has not been created yet and return how many were checked.
+
+    Used for the first preview and for "Re-check" after the user fixed something in BackOffice.
+    The user's choices are kept: a pending step whose preview fails is unticked, and a step that was
+    unticked only because its preview failed is ticked again once it passes. Nothing is written."""
+    run = run_file.run
+    rows = json.loads(run_file.rows_json or '[]')
+    steps_by_key = {s.step_key: s for s in run_file.steps}
+    documents: Dict[str, Dict[str, Any]] = {}
+    checked = 0
+
+    for step in run_file.steps:
+        if step.status in ('success', 'running', 'interrupted'):
+            continue
+        checked += 1
+        previous = json.loads(step.preview_json or '{}')
+        config = configs.get(step.database_config_id)
         try:
             if config is None:
                 raise StepError('The database used by this rule no longer exists')
             service = service_for(config)
             if step.type == 'copy':
-                source_step = steps_by_key.get(step.source_step_key)
-                source_document = documents.get(step.source_step_key)
-                if source_step is None or source_document is None:
-                    raise StepError('The invoice it copies could not be prepared')
-                source_service = service_for(configs[source_step.database_config_id])
+                source_lines, source_number = _copy_source_for_preview(step, steps_by_key, documents, configs, service_for)
+                source_service = service_for(configs[steps_by_key[step.source_step_key].database_config_id])
                 document, missing, added = _copy_document(
-                    source_service, service, source_document['lines'], source_step.base_number,
-                    step.party_id, add_products=False
+                    source_service, service, source_lines, source_number, step.party_id, add_products=False
                 )
             else:
                 document, missing = _excel_document(step.type, service, rows, step.party_id)
@@ -296,22 +305,73 @@ def plan_file(run_file: BatchRunFile, rule: BatchRule, configs: Dict[int, Databa
             documents[step.step_key] = document
             step.base_number = int(_document_number(step.type, document))
             step.preview_json = json.dumps(_summary(step.type, document, missing, added), default=str)
+            if step.status == 'excluded' and previous.get('error'):
+                step.status = 'pending'
+                step.message = None
+                add_log(run, 'info', f'{run_file.filename} › {step_title(step)}: problem fixed, ticked again', step=step)
+            elif step.status == 'pending':
+                step.message = None
             if missing:
                 add_log(run, 'warning',
                         f'{run_file.filename} › {step_title(step)}: {len(missing)} UPC(s) not found, those lines will be skipped',
                         step=step, details=[m.get('upc') for m in missing])
         except StepError as e:
-            step.status = 'excluded'
-            step.message = str(e)
-            step.preview_json = json.dumps({'error': str(e), **e.details}, default=str)
-            add_log(run, 'warning', f'{run_file.filename} › {step_title(step)}: preview failed: {e}',
-                    step=step, details=e.details or None)
+            _preview_failed(run, run_file, step, str(e), e.details, 'warning')
         except Exception as e:
-            step.status = 'excluded'
-            step.message = f'Unexpected error: {e}'
-            step.preview_json = json.dumps({'error': step.message})
-            add_log(run, 'error', f'{run_file.filename} › {step_title(step)}: preview crashed: {e}',
-                    step=step, details=traceback.format_exc())
+            _preview_failed(run, run_file, step, f'Unexpected error: {e}', None, 'error', traceback.format_exc())
+    return checked
+
+
+def _copy_source_for_preview(step, steps_by_key, documents, configs, service_for):
+    """Lines of the invoice a copy will copy: the created invoice if it exists, otherwise its preview"""
+    source = steps_by_key.get(step.source_step_key)
+    if source is None:
+        raise StepError('The invoice it copies is not part of this rule')
+    if source.status == 'success':
+        source_config = configs.get(source.database_config_id)
+        if source_config is None:
+            raise StepError('The source database no longer exists')
+        ok, data, message = service_for(source_config).get_invoice_with_details(source.doc_id)
+        if not ok:
+            raise StepError(f'Could not read invoice #{source.doc_number} from {source.database_name}: {message}')
+        return data['details'], source.doc_number
+    if step.source_step_key in documents:
+        return documents[step.source_step_key]['lines'], source.base_number
+    raise StepError('The invoice it copies could not be prepared')
+
+
+def _preview_failed(run, run_file, step, message, details, level, trace=None):
+    if step.status == 'pending':
+        step.status = 'excluded'
+    step.message = message
+    step.preview_json = json.dumps({'error': message, **(details or {})}, default=str)
+    add_log(run, level, f'{run_file.filename} › {step_title(step)}: preview failed: {message}',
+            step=step, details=trace or details or None)
+
+
+def set_step_hold(step: BatchRunStep, hold: bool) -> List[BatchRunStep]:
+    """Put a step (and the copies of it) on hold for later, or take them off hold. Returns the changed steps."""
+    affected = [step] + [s for s in step.run_file.steps
+                         if s.type == 'copy' and s.source_step_key == step.step_key]
+    changed = []
+    for s in affected:
+        if hold and s.status in ('pending', 'failed', 'blocked', 'excluded'):
+            s.status = 'held'
+            changed.append(s)
+        elif not hold and s.status == 'held':
+            s.status = 'pending'
+            changed.append(s)
+    return changed
+
+
+def finished_run_status(statuses: List[str]) -> str:
+    """Status of a run that has stopped, from the statuses of its steps"""
+    found = set(statuses)
+    if found & {'failed', 'blocked', 'interrupted', 'pending', 'running'}:
+        return 'completed_with_errors'
+    if 'held' in found:
+        return 'on_hold'
+    return 'completed'
 
 
 def _document_total(step_type: str, document: Dict[str, Any]) -> float:
@@ -468,15 +528,17 @@ def execute_run(run_id: int, service_for: ServiceFactory = DatabaseService, slee
 
         all_steps = [s for f in run.files if not f.error for s in f.steps if s.status != 'excluded']
         created = sum(1 for s in all_steps if s.status == 'success')
+        held = sum(1 for s in all_steps if s.status == 'held')
         run.finished_at = datetime.utcnow()
         if cancelled:
             run.status = 'cancelled'
             add_log(run, 'warning', f'Run cancelled: {created} of {len(all_steps)} document(s) created; '
                                     f'the rest can be started again')
         else:
-            ok = created == len(all_steps)
-            run.status = 'completed' if ok else 'completed_with_errors'
-            add_log(run, 'info' if ok else 'warning', f'Run finished: {created} of {len(all_steps)} document(s) created')
+            run.status = finished_run_status([s.status for s in all_steps])
+            on_hold = f', {held} on hold for later' if held else ''
+            add_log(run, 'info' if run.status != 'completed_with_errors' else 'warning',
+                    f'Run finished: {created} of {len(all_steps)} document(s) created{on_hold}')
         db.session.commit()
     except Exception as e:
         db.session.rollback()
