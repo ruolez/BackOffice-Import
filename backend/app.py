@@ -5,12 +5,32 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 from datetime import datetime
 import logging
+from logging.handlers import RotatingFileHandler
 
 # Import models and routes
 from app.models import db, User, DatabaseConfig
-from app.routes import auth, database_config, invoice, customer, purchase_order, supplier, invoice_copy, export
+from app.routes import auth, database_config, invoice, customer, purchase_order, supplier, invoice_copy, export, batch
+
+def setup_file_logging():
+    """Keep backend logs in the data volume so errors can be read after the fact"""
+    logging.basicConfig(level=logging.INFO)
+    log_dir = os.environ.get('LOG_DIR', '/app/data/logs')
+    root = logging.getLogger()
+    if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        return
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        handler = RotatingFileHandler(os.path.join(log_dir, 'backend.log'), maxBytes=5 * 1024 * 1024, backupCount=5)
+    except OSError as e:
+        print(f"File logging disabled: {e}")
+        return
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
 
 def create_app():
+    setup_file_logging()
     app = Flask(__name__)
     
     # Configuration
@@ -41,6 +61,7 @@ def create_app():
     app.register_blueprint(supplier.bp, url_prefix='/api/supplier')
     app.register_blueprint(invoice_copy.bp, url_prefix='/api/invoice-copy')
     app.register_blueprint(export.bp, url_prefix='/api/export')
+    app.register_blueprint(batch.bp, url_prefix='/api/batch')
 
     # Create tables and run migrations
     with app.app_context():
@@ -60,6 +81,9 @@ def create_app():
             db.session.add(admin)
             db.session.commit()
             print("Default admin user created: admin / admin123")
+
+        from app.services.batch_service import recover_interrupted_runs
+        recover_interrupted_runs()
     
     # Health check endpoint
     @app.route('/api/health')

@@ -234,6 +234,72 @@ class ApiService {
     }
 
     // Fetch a binary file response as a Blob (the standard request() assumes JSON)
+    // Monthly run (batch) endpoints
+    async getBatchRules() {
+        return this.request('/batch/rules');
+    }
+
+    async saveBatchRule(rule) {
+        return this.request(rule.id ? `/batch/rules/${rule.id}` : '/batch/rules', {
+            method: rule.id ? 'PUT' : 'POST',
+            body: JSON.stringify(rule)
+        });
+    }
+
+    async deleteBatchRule(ruleId) {
+        return this.request(`/batch/rules/${ruleId}`, { method: 'DELETE' });
+    }
+
+    async getBatchRuns() {
+        return this.request('/batch/runs');
+    }
+
+    async createBatchRun() {
+        return this.request('/batch/runs', { method: 'POST' });
+    }
+
+    async getBatchRun(runId, withLogs = false) {
+        return this.request(`/batch/runs/${runId}${withLogs ? '?logs=1' : ''}`);
+    }
+
+    async discardBatchRun(runId) {
+        return this.request(`/batch/runs/${runId}`, { method: 'DELETE' });
+    }
+
+    async addBatchRunFile(runId, file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const headers = { ...this.headers };
+        delete headers['Content-Type'];
+        return this.request(`/batch/runs/${runId}/files`, { method: 'POST', body: formData, headers });
+    }
+
+    async setBatchFileRule(runId, fileId, ruleId) {
+        return this.request(`/batch/runs/${runId}/files/${fileId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ rule_id: ruleId })
+        });
+    }
+
+    async removeBatchRunFile(runId, fileId) {
+        return this.request(`/batch/runs/${runId}/files/${fileId}`, { method: 'DELETE' });
+    }
+
+    async setBatchStepIncluded(runId, stepId, included) {
+        return this.request(`/batch/runs/${runId}/steps/${stepId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ included })
+        });
+    }
+
+    async executeBatchRun(runId) {
+        return this.request(`/batch/runs/${runId}/execute`, { method: 'POST' });
+    }
+
+    async downloadBatchRunLog(runId) {
+        return this.requestBlob(`/batch/runs/${runId}/log.txt`);
+    }
+
     async requestBlob(endpoint) {
         const response = await fetch(`${this.baseUrl}${endpoint}`, {
             credentials: 'include'

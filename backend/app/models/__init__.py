@@ -51,3 +51,89 @@ class DatabaseConfig(db.Model):
     
     def get_connection_string(self):
         return f"mssql+pyodbc://{self.username}:{self.password}@{self.server}:{self.port}/{self.database}?driver={self.driver}"
+
+class BatchRule(db.Model):
+    """A saved recipe: which documents to create from one kind of sales report file"""
+    __tablename__ = 'batch_rules'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    match_text = db.Column(db.String(200), default='')
+    steps_json = db.Column(db.Text, nullable=False, default='[]')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BatchRun(db.Model):
+    __tablename__ = 'batch_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    # draft -> running -> completed | completed_with_errors | interrupted
+    status = db.Column(db.String(30), nullable=False, default='draft')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+
+    files = db.relationship('BatchRunFile', backref='run', lazy=True, cascade='all, delete-orphan',
+                            order_by='BatchRunFile.position')
+    logs = db.relationship('BatchLog', backref='run', lazy=True, cascade='all, delete-orphan',
+                           order_by='BatchLog.id')
+
+
+class BatchRunFile(db.Model):
+    __tablename__ = 'batch_run_files'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('batch_runs.id'), nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    filename = db.Column(db.String(255), nullable=False)
+    sha256 = db.Column(db.String(64))
+    # Not a foreign key: deleting a rule must not break the history of runs that used it
+    rule_id = db.Column(db.Integer)
+    rule_name = db.Column(db.String(100))
+    rows_json = db.Column(db.Text, nullable=False, default='[]')
+    error = db.Column(db.Text)
+    warnings_json = db.Column(db.Text, default='[]')
+
+    steps = db.relationship('BatchRunStep', backref='run_file', lazy=True, cascade='all, delete-orphan',
+                            order_by='BatchRunStep.position')
+
+
+class BatchRunStep(db.Model):
+    __tablename__ = 'batch_run_steps'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_file_id = db.Column(db.Integer, db.ForeignKey('batch_run_files.id'), nullable=False)
+    run_id = db.Column(db.Integer, db.ForeignKey('batch_runs.id'), nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    step_key = db.Column(db.String(40), nullable=False)
+    type = db.Column(db.String(20), nullable=False)  # invoice | po | copy
+    database_config_id = db.Column(db.Integer)
+    database_name = db.Column(db.String(100))
+    party_id = db.Column(db.Integer)
+    party_label = db.Column(db.String(255))
+    source_step_key = db.Column(db.String(40))
+    # pending | running | success | failed | blocked | excluded | interrupted
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    preview_json = db.Column(db.Text, default='{}')
+    base_number = db.Column(db.Integer)
+    doc_number = db.Column(db.String(50))
+    doc_id = db.Column(db.Integer)
+    message = db.Column(db.Text)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+
+
+class BatchLog(db.Model):
+    __tablename__ = 'batch_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('batch_runs.id'), nullable=False)
+    run_file_id = db.Column(db.Integer)
+    run_step_id = db.Column(db.Integer)
+    level = db.Column(db.String(10), nullable=False, default='info')  # info | warning | error
+    message = db.Column(db.Text, nullable=False)
+    details = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

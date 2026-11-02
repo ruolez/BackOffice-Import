@@ -125,6 +125,16 @@
                     <button class="nav-link active" id="databases-tab" data-bs-toggle="tab" data-bs-target="#databases" type="button" role="tab">
                         <i class="fas fa-database"></i><span>Databases</span>
                     </button>
+                    <div class="sidebar-label">Automate</div>
+                    <button class="nav-link" id="batch-run-tab" data-bs-toggle="tab" data-bs-target="#batch-run" type="button" role="tab">
+                        <i class="fas fa-bolt"></i><span>Monthly Run</span>
+                    </button>
+                    <button class="nav-link" id="batch-rules-tab" data-bs-toggle="tab" data-bs-target="#batch-rules" type="button" role="tab">
+                        <i class="fas fa-list-check"></i><span>Rules</span>
+                    </button>
+                    <button class="nav-link" id="batch-history-tab" data-bs-toggle="tab" data-bs-target="#batch-history" type="button" role="tab">
+                        <i class="fas fa-clock-rotate-left"></i><span>Run History</span>
+                    </button>
                     <div class="sidebar-label">Create</div>
                     <button class="nav-link" id="invoice-tab" data-bs-toggle="tab" data-bs-target="#invoice" type="button" role="tab">
                         <i class="fas fa-file-invoice-dollar"></i><span>Invoice</span>
@@ -168,6 +178,42 @@
                         <div id="database-list">
                             <!-- Will be populated by JavaScript -->
                         </div>
+                    </section>
+
+                    <!-- Monthly Run Tab -->
+                    <section class="tab-pane fade" id="batch-run" role="tabpanel">
+                        <header class="page-header">
+                            <div>
+                                <h1 class="page-title">Monthly Run</h1>
+                                <p class="page-subtitle">Drop all of this month's sales report files. Each file follows its rule; review everything, then create it all at once.</p>
+                            </div>
+                        </header>
+                        <div id="batch-run-content"></div>
+                    </section>
+
+                    <!-- Rules Tab -->
+                    <section class="tab-pane fade" id="batch-rules" role="tabpanel">
+                        <header class="page-header">
+                            <div>
+                                <h1 class="page-title">Rules</h1>
+                                <p class="page-subtitle">A rule says which invoices, copies and purchase orders to create from one kind of file.</p>
+                            </div>
+                            <button class="btn btn-primary" id="newBatchRuleBtn" type="button">
+                                <i class="fas fa-plus me-2"></i>New Rule
+                            </button>
+                        </header>
+                        <div id="batch-rules-content"></div>
+                    </section>
+
+                    <!-- Run History Tab -->
+                    <section class="tab-pane fade" id="batch-history" role="tabpanel">
+                        <header class="page-header">
+                            <div>
+                                <h1 class="page-title">Run History</h1>
+                                <p class="page-subtitle">Every monthly run with what it created and its full log.</p>
+                            </div>
+                        </header>
+                        <div id="batch-history-content"></div>
                     </section>
 
                     <!-- Invoice Creation Tab -->
@@ -223,6 +269,25 @@
                     </section>
                 </div>
             </main>
+        </div>
+    </div>
+
+    <!-- Batch Rule Modal -->
+    <div class="modal fade" id="batchRuleModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-scrollable modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="batchRuleModalTitle">New Rule</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="batchRuleModalBody"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="saveBatchRuleBtn">
+                        <i class="fas fa-check me-2"></i>Save Rule
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -341,6 +406,7 @@
     <script src="static/js/purchaseOrder.js"></script>
     <script src="static/js/invoiceCopy.js"></script>
     <script src="static/js/export.js"></script>
+    <script src="static/js/batch.js"></script>
     <script src="static/js/app.js"></script>
 </body>
 </html>
