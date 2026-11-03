@@ -42,7 +42,7 @@ class TestBuildSalesRows:
                                          [{'upc': '111', 'qty': 3}], [], [])
 
         assert [(r['Cost'], r['QTY'], r['sold'], r['credited']) for r in rows] == [(2.0, 10, 10, 0), (2.5, 1, 4, 3)]
-        assert summary['credits_applied'] == [{'upc': '111', 'qty': 3}]
+        assert summary['credits_applied'] == [{'upc': '111', 'qty': 3, 'allocations': [{'cost': 2.5, 'qty': 3}]}]
 
     def test_credit_larger_than_the_latest_line_continues_on_the_next_and_drops_emptied_lines(self):
         rows, summary = build_sales_rows([sale('111', 2.0, 10, 3), sale('111', 2.5, 4, 20)],
@@ -50,6 +50,7 @@ class TestBuildSalesRows:
 
         assert [(r['Cost'], r['QTY']) for r in rows] == [(2.0, 8)]
         assert [(d['cost'], d['sold'], d['credited'], d['net']) for d in summary['dropped']] == [(2.5, 4, 4, 0)]
+        assert summary['credits_applied'][0]['allocations'] == [{'cost': 2.5, 'qty': 4}, {'cost': 2.0, 'qty': 2}]
 
     def test_credits_beyond_all_sales_drop_the_product_with_a_warning(self):
         rows, summary = build_sales_rows([sale('111', 2.0, 2, 3)], [{'upc': '111', 'qty': 5}], [], [])
@@ -70,7 +71,8 @@ class TestBuildSalesRows:
 
         assert [r['UPC'] for r in rows] == ['111']
         assert ([e['upc'] for e in summary['excluded_by_upc']], [e['upc'] for e in summary['excluded_by_word']],
-                summary['credits_without_sales']) == (['333'], ['222'], [])
+                summary['credits_without_sales'], summary['credits_excluded']) == (
+            ['333'], ['222'], [], [{'upc': '222', 'description': '', 'qty': 9.0}])
 
     def test_lines_without_upc_are_skipped_and_counted(self):
         rows, summary = build_sales_rows([sale('', 1, 5, 3), sale(None, 1, 1, 3), sale('111', 1, 1, 3)], [], [], [])
@@ -155,3 +157,27 @@ class TestSalesIntoInvoices:
             ('111', 2.0, 3.0), ('111', 2.5, 1.0)]
         missing = json.loads(run_file.steps[0].preview_json)['missing_upcs']
         assert [(m['upc'], m['description']) for m in missing] == [('999', 'Unknown thing')]
+
+
+class TestGroupCreditMemos:
+    def test_lines_are_grouped_per_memo_in_date_order(self):
+        def line(memo_id, number, day, upc, qty):
+            return {'memo_id': memo_id, 'number': number, 'date': datetime(2026, 10, day), 'account_no': 'C1',
+                    'business_name': 'Walk-in', 'memo_total': 10, 'upc': f' {upc} ', 'description': f'Item {upc}',
+                    'qty': qty, 'unit_price': 2.5, 'extended_price': 2.5 * qty}
+
+        memos = sales.group_credit_memos([line(7, 'CM7', 20, '111', 1), line(3, 'CM3', 4, '111', 2),
+                                          line(7, 'CM7', 20, '222', 1)])
+
+        assert [(m['number'], m['date'], [(l['upc'], l['qty']) for l in m['lines']]) for m in memos] == [
+            ('CM3', '2026-10-04', [('111', 2.0)]),
+            ('CM7', '2026-10-20', [('111', 1.0), ('222', 1.0)]),
+        ]
+
+    def test_credit_memos_use_the_preset_filters_and_month(self):
+        store = SalesBackOffice([], [], [])
+        calls = []
+        store.get_credit_memo_lines = lambda *a: (calls.append(a), (True, [], 'ok'))[1]
+
+        assert sales.credit_memos_for(make_preset(), '2026-02', store) == []
+        assert calls == [(datetime(2026, 2, 1), datetime(2026, 3, 1), [4, 5], ['INT01'])]

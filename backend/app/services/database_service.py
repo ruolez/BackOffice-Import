@@ -814,6 +814,25 @@ class DatabaseService:
             GROUP BY d.ProductUPC
         """, [start, end, *subcategory_ids, *exclude_accounts])
 
+    def get_credit_memo_lines(self, start, end, subcategory_ids: List[int], exclude_accounts: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Every credit memo line of [start, end) in the subcategories, with its memo's header fields"""
+        if not subcategory_ids:
+            return True, [], "No subcategories selected"
+        sub_marks = ','.join('?' for _ in subcategory_ids)
+        account_filter = f"AND ISNULL(c.AccountNo, '') NOT IN ({','.join('?' for _ in exclude_accounts)})" if exclude_accounts else ''
+        return self.execute_query(f"""
+            SELECT c.CmemoID AS memo_id, c.CmemoNumber AS number, c.CmemoDate AS date, c.AccountNo AS account_no,
+                   c.BusinessName AS business_name, c.CmemoTotal AS memo_total,
+                   d.ProductUPC AS upc, d.ProductDescription AS description, d.Quantity AS qty,
+                   d.UnitPrice AS unit_price, d.ExtendedPrice AS extended_price
+            FROM CreditMemosDetails_tbl d
+            JOIN CreditMemos_tbl c ON c.CmemoID = d.CmemoID
+            WHERE c.CmemoDate >= ? AND c.CmemoDate < ?
+              AND d.SubCateID IN ({sub_marks})
+              {account_filter}
+            ORDER BY c.CmemoDate, c.CmemoNumber, d.LineID
+        """, [start, end, *subcategory_ids, *exclude_accounts])
+
     def get_invoices_list(self, page: int = 1, per_page: int = 25, search: str = None) -> Tuple[bool, Dict[str, Any], str]:
         """Get paginated list of invoices with optional search by InvoiceNumber"""
         try:

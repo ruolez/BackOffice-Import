@@ -461,6 +461,24 @@ def test_preset():
     return jsonify({'success': True, 'rows': rows[:200], 'summary': summary}), 200
 
 
+@bp.route('/presets/test/credit-memos', methods=['POST'])
+@login_required
+def test_preset_credit_memos():
+    """Credit memos a test pull of unsaved preset settings looked at"""
+    preset, errors = _preset_payload()
+    errors = [e for e in errors if e != 'Preset name is required']
+    if errors:
+        return jsonify({'error': '; '.join(errors), 'errors': errors}), 400
+    model = SalesPreset(user_id=current_user.id)
+    sales.apply_preset(model, preset)
+    period = sales.previous_month(datetime.now().date())
+    try:
+        memos = sales.credit_memos_for(model, period, DatabaseService(_config_or_404(preset['source_config_id'])))
+    except sales.PullError as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'success': True, 'memos': memos, 'period_label': sales.month_label(period)}), 200
+
+
 @bp.route('/sources/<int:config_id>/categories', methods=['GET'])
 @login_required
 def source_categories(config_id):
@@ -601,3 +619,26 @@ def download_file_rows(run_id, file_id):
     name = secure_filename(run_file.filename.rsplit('.', 1)[0]) or f'file-{run_file.id}'
     return send_file(build_export_excel(rows), as_attachment=True, download_name=f'{name}.xlsx',
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@bp.route('/runs/<int:run_id>/files/<int:file_id>/credit-memos', methods=['GET'])
+@login_required
+def run_file_credit_memos(run_id, file_id):
+    """Credit memos behind a sales pull in a run, with the preset as it is now"""
+    run = _run_or_404(run_id)
+    if not run:
+        return jsonify({'error': 'Run not found'}), 404
+    run_file = BatchRunFile.query.filter_by(id=file_id, run_id=run.id, source_type='sales').first()
+    if not run_file:
+        return jsonify({'error': 'Sales source not found'}), 404
+    preset = _preset_or_404(run_file.preset_id)
+    if not preset:
+        return jsonify({'error': 'The preset of these sales was deleted'}), 404
+    config = _config_or_404(preset.source_config_id)
+    if not config:
+        return jsonify({'error': 'The store database of this preset no longer exists'}), 404
+    try:
+        memos = sales.credit_memos_for(preset, run_file.period, DatabaseService(config))
+    except sales.PullError as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'success': True, 'memos': memos, 'period_label': sales.month_label(run_file.period)}), 200

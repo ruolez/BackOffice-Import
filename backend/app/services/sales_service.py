@@ -128,6 +128,7 @@ def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
         'excluded_by_upc': [],
         'excluded_by_word': [],
         'credits_applied': [],
+        'credits_excluded': [],
         'credits_without_sales': [],
         'credit_over_sales': [],
         'dropped': [],
@@ -157,7 +158,11 @@ def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
     for credit in credits:
         upc = str(credit.get('upc') or '').strip()
         remaining = _qty(credit.get('qty'))
-        if not upc or remaining <= 0 or upc in excluded_upcs or exclusion(upc, credit.get('description')):
+        if not upc or remaining <= 0:
+            continue
+        if upc in excluded_upcs or exclusion(upc, credit.get('description')):
+            summary['credits_excluded'].append({'upc': upc, 'description': credit.get('description') or '',
+                                                'qty': remaining})
             continue
         candidates = sorted(by_upc.get(upc, []),
                             key=lambda l: (l['last_sale'] is not None, l['last_sale'] or datetime.min, l['sold']),
@@ -166,15 +171,19 @@ def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
             summary['credits_without_sales'].append({'upc': upc, 'description': credit.get('description') or '',
                                                      'qty': remaining})
             continue
-        summary['credits_applied'].append({'upc': upc, 'qty': remaining})
+        applied = {'upc': upc, 'qty': remaining, 'allocations': []}
+        summary['credits_applied'].append(applied)
         for line in candidates:
             if remaining <= 0:
                 break
             take = min(remaining, max(line['sold'] - line['credited'], 0))
-            line['credited'] += take
-            remaining -= take
+            if take > 0:
+                line['credited'] += take
+                remaining -= take
+                applied['allocations'].append({'cost': line['cost'], 'qty': take})
         if remaining > 0:
             candidates[0]['credited'] += remaining
+            applied['over'] = remaining
             summary['credit_over_sales'].append({'upc': upc, 'description': candidates[0]['description'],
                                                  'over': remaining})
 
@@ -206,6 +215,39 @@ def sales_notes(summary: Dict[str, Any]) -> List[str]:
     if summary['without_upc']:
         notes.append(f"{summary['without_upc']} sale line group(s) without a UPC were skipped")
     return notes
+
+
+def group_credit_memos(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Credit memo lines (one row per memo line, memo fields repeated) grouped per memo, in date order"""
+    memos: Dict[Any, Dict[str, Any]] = {}
+    for line in lines:
+        memo = memos.setdefault(line['memo_id'], {
+            'memo_id': line['memo_id'],
+            'number': line.get('number') or '',
+            'date': line['date'].strftime('%Y-%m-%d') if hasattr(line.get('date'), 'strftime') else str(line.get('date') or '')[:10],
+            'account_no': line.get('account_no') or '',
+            'business_name': line.get('business_name') or '',
+            'total': round(float(line.get('memo_total') or 0), 2),
+            'lines': [],
+        })
+        memo['lines'].append({
+            'upc': str(line.get('upc') or '').strip(),
+            'description': line.get('description') or '',
+            'qty': _qty(line.get('qty')),
+            'unit_price': round(float(line.get('unit_price') or 0), 2),
+            'extended_price': round(float(line.get('extended_price') or 0), 2),
+        })
+    return sorted(memos.values(), key=lambda m: (m['date'], str(m['number'])))
+
+
+def credit_memos_for(preset: SalesPreset, period: str, service) -> List[Dict[str, Any]]:
+    """The credit memo lines a pull of this preset and month considers (same subcategory and account filters)"""
+    start, end = month_range(period)
+    ok, lines, message = service.get_credit_memo_lines(start, end, json.loads(preset.subcategory_ids_json or '[]'),
+                                                       json.loads(preset.exclude_accounts_json or '[]'))
+    if not ok:
+        raise PullError(f'Could not read credit memos: {message}')
+    return group_credit_memos(lines)
 
 
 def pull_preset(preset: SalesPreset, period: str, service) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:

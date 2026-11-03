@@ -1842,6 +1842,14 @@ html[data-bs-theme="dark"] .segmented .nav-link.active { background: var(--surfa
 .preset-test-table { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 .preset-test-table thead th { position: sticky; top: 0; background: var(--surface); }
 
+.sales-memo-btn { margin-left: 10px; padding: 1px 8px; font-size: 0.75rem; }
+.memo-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+.memo-toolbar input { max-width: 300px; margin-left: auto; }
+.memo-card { border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 12px; overflow: hidden; }
+.memo-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.memo-table td .status-pill { white-space: normal; text-align: left; border-radius: var(--radius); }
+.memo-table td:last-child { width: 45%; }
+
 /* Monthly run report */
 .batch-banner { display: flex; align-items: center; gap: 12px; }
 

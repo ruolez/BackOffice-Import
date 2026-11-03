@@ -346,6 +346,14 @@ class ApiService {
         return this.request('/batch/presets/test', { method: 'POST', body: JSON.stringify(preset) });
     }
 
+    async getTestCreditMemos(preset) {
+        return this.request('/batch/presets/test/credit-memos', { method: 'POST', body: JSON.stringify(preset) });
+    }
+
+    async getBatchFileCreditMemos(runId, fileId) {
+        return this.request(`/batch/runs/${runId}/files/${fileId}/credit-memos`);
+    }
+
     async getSourceCategories(configId) {
         return this.request(`/batch/sources/${configId}/categories`);
     }

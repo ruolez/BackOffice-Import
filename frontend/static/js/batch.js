@@ -89,7 +89,7 @@ function renderBatchFiles(run, { editable, interactive = false, rules }) {
                     ${canToggle && file.steps.length ? `<button class="btn btn-sm btn-outline-secondary batch-recheck-file" data-file-id="${file.id}" title="Check this file against the databases again"><i class="fas fa-rotate-right me-1"></i>Re-check</button>` : ''}
                     ${editable ? `<button class="icon-btn batch-remove-file" data-file-id="${file.id}" title="Remove file" aria-label="Remove file"><i class="fas fa-trash"></i></button>` : ''}
                 </div>
-                ${error}${warnings}${file.source_type === 'sales' && file.source && !file.error ? `<div class="batch-sales-summary">${renderSalesSummary(file.source)}</div>` : ''}${noRule}
+                ${error}${warnings}${file.source_type === 'sales' && file.source && !file.error ? `<div class="batch-sales-summary">${renderSalesSummary(file.source, { kind: 'file', runId: run.id, fileId: file.id })}</div>` : ''}${noRule}
                 ${file.steps.length ? renderBatchSteps(file, canToggle && !file.error) : ''}
             </div>`;
     }).join('');

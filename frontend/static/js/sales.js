@@ -392,13 +392,14 @@ class SalesPresetManager {
             return;
         }
         if (!this.testResult) { el.innerHTML = ''; return; }
-        el.innerHTML = renderSalesSummary(this.testResult.summary) + `
+        el.innerHTML = renderSalesSummary(this.testResult.summary, { kind: 'test' }) + `
             <div class="table-responsive preset-test-table">
                 <table class="table table-sm">
                     <thead><tr><th>UPC</th><th>Product</th><th class="text-end">Cost</th><th class="text-end">Sold</th><th class="text-end">Credited</th><th class="text-end">Qty</th></tr></thead>
                     <tbody>${this.testResult.rows.map(r => `
                         <tr><td><code>${esc(r.UPC)}</code></td><td>${esc(r.description)}</td><td class="text-end">${money(r.Cost)}</td>
-                            <td class="text-end">${r.sold}</td><td class="text-end">${r.credited || ''}</td><td class="text-end"><strong>${r.QTY}</strong></td></tr>`).join('')}
+                            <td class="text-end">${r.sold}</td><td class="text-end">${r.credited
+                                ? `<button type="button" class="btn btn-link btn-sm p-0" data-credit-memos="test" data-upc="${esc(r.UPC)}" title="See the credit memos">${r.credited}</button>` : ''}</td><td class="text-end"><strong>${r.QTY}</strong></td></tr>`).join('')}
                     </tbody>
                 </table>
             </div>
@@ -430,8 +431,9 @@ class SalesPresetManager {
     }
 }
 
-// Summary of a sales pull (preset test and Monthly Run card)
-function renderSalesSummary(summary) {
+// Summary of a sales pull (preset test and Monthly Run card).
+// context says where its credit memos can be loaded from: {kind: 'test'} or {kind: 'file', runId, fileId}
+function renderSalesSummary(summary, context = null) {
     const parts = [
         `<strong>${summary.rows}</strong> line(s)`,
         `${summary.products} product(s)`,
@@ -442,13 +444,150 @@ function renderSalesSummary(summary) {
     if (summary.excluded_by_upc?.length) left.push(`${summary.excluded_by_upc.length} by product`);
     if (summary.excluded_by_word?.length) left.push(`${summary.excluded_by_word.length} by word`);
     if (summary.excluded_accounts?.length) left.push(`accounts ${summary.excluded_accounts.map(esc).join(', ')}`);
-    const credits = summary.credits_applied?.length ? `${summary.credits_applied.length} product(s) reduced by credit memos` : 'no credit memos';
+    const creditCount = (summary.credits_applied?.length || 0) + (summary.credits_without_sales?.length || 0)
+        + (summary.credits_excluded?.length || 0);
+    const credits = summary.credits_applied?.length ? `${summary.credits_applied.length} product(s) reduced by credit memos` : 'no credit memos subtracted';
+    const memoButton = context && creditCount ? `<button type="button" class="btn btn-sm btn-outline-secondary sales-memo-btn" data-credit-memos="${context.kind}"
+        ${context.runId ? `data-run="${context.runId}" data-file="${context.fileId}"` : ''}><i class="fas fa-file-invoice me-1"></i>View credit memos</button>` : '';
     return `
         <div class="sales-summary">
             <div><i class="fas fa-store me-2"></i>${esc(summary.period_label)}${summary.source_db ? ` · ${esc(summary.source_db)}` : ''} · ${parts.join(' · ')}</div>
-            <div class="text-muted small">${summary.sale_lines} sale line group(s) read · ${credits}${left.length ? ` · left out: ${left.join(', ')}` : ''}</div>
+            <div class="text-muted small">${summary.sale_lines} sale line group(s) read · ${credits}${left.length ? ` · left out: ${left.join(', ')}` : ''}${memoButton}</div>
             ${(summary.notes || []).map(n => `<div class="batch-note batch-note-warning"><i class="fas fa-triangle-exclamation"></i>${esc(n)}</div>`).join('')}
         </div>`;
 }
+
+// Credit memo viewer: what each credit memo holds and what the pull did with it
+const creditMemoViewer = {
+    async open(context, summary, upc = '') {
+        this.summary = summary || {};
+        this.filter = 'all';
+        this.search = upc;
+        const body = document.getElementById('creditMemoModalBody');
+        document.getElementById('creditMemoModalTitle').textContent = `Credit memos · ${this.summary.period_label || ''}`;
+        body.innerHTML = '<p class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Loading credit memos…</p>';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('creditMemoModal')).show();
+        try {
+            const response = context.kind === 'test'
+                ? await api.getTestCreditMemos(salesPresetManager.payload())
+                : await api.getBatchFileCreditMemos(context.runId, context.fileId);
+            this.memos = response.memos;
+            this.render();
+        } catch (error) {
+            body.innerHTML = `<div class="alert alert-danger">Could not load credit memos: ${esc(error.message)}</div>`;
+        }
+    },
+
+    outcomes() {
+        const s = this.summary;
+        const map = {};
+        (s.credits_applied || []).forEach(c => { map[c.upc] = { kind: 'applied', ...c }; });
+        (s.credits_without_sales || []).forEach(c => { map[c.upc] = { kind: 'nosales', ...c }; });
+        (s.credits_excluded || []).forEach(c => { map[c.upc] = { kind: 'excluded', ...c }; });
+        const dropped = {};
+        (s.dropped || []).forEach(d => { (dropped[d.upc] = dropped[d.upc] || []).push(d); });
+        return { map, dropped };
+    },
+
+    describe(upc, lineQty, { map, dropped }) {
+        const o = map[upc];
+        if (!o) return { kind: 'unused', text: 'Not used: zero quantity or not in this pull' };
+        const all = o.qty !== lineQty ? ` (${o.qty} credited for this product in all memos)` : '';
+        if (o.kind === 'excluded') return { kind: 'excluded', text: `Left out: the product is excluded by the preset${all}` };
+        if (o.kind === 'nosales') return { kind: 'nosales', text: `Ignored: the product had no sales this month${all}` };
+        const parts = (o.allocations || []).map(a => `${a.qty} off the ${money(a.cost)} line`);
+        let text = `Subtracted${all}: ${parts.join(', ') || o.qty}`;
+        if (o.over) text += `. Credits exceed sales by ${o.over}`;
+        if (dropped[upc]) text += `. Dropped: ${dropped[upc].map(d => `${money(d.cost)} line`).join(', ')} (nothing left after credits)`;
+        return { kind: dropped[upc] ? 'dropped' : 'applied', text };
+    },
+
+    render() {
+        const body = document.getElementById('creditMemoModalBody');
+        const outcomes = this.outcomes();
+        const term = this.search.trim().toLowerCase();
+        const filters = [['all', 'All'], ['applied', 'Subtracted'], ['dropped', 'Dropped a line'], ['nosales', 'No sales'], ['excluded', 'Left out']];
+
+        const memos = this.memos.map(m => ({
+            ...m,
+            lines: m.lines.map(l => ({ ...l, outcome: this.describe(l.upc, l.qty, outcomes) }))
+        })).map(m => {
+            const memoMatches = !term || [m.number, m.account_no, m.business_name].some(v => String(v).toLowerCase().includes(term));
+            const lines = m.lines.filter(l =>
+                (this.filter === 'all' || l.outcome.kind === this.filter) &&
+                (memoMatches || l.upc.toLowerCase().includes(term) || l.description.toLowerCase().includes(term)));
+            return { ...m, shown: lines };
+        }).filter(m => m.shown.length);
+
+        const totalLines = this.memos.reduce((n, m) => n + m.lines.length, 0);
+        const totalQty = this.memos.reduce((n, m) => n + m.lines.reduce((q, l) => q + l.qty, 0), 0);
+        const cls = { applied: 'success', dropped: 'warning', nosales: 'warning', excluded: 'muted', unused: 'muted' };
+
+        body.innerHTML = `
+            <div class="memo-toolbar">
+                <div class="text-muted small"><strong>${this.memos.length}</strong> credit memo(s) · ${totalLines} line(s) · qty ${Math.round(totalQty * 100) / 100}
+                    <span class="d-block">Only memos in the preset's subcategories and not from excluded accounts are counted.</span></div>
+                <input class="form-control form-control-sm" id="memoSearch" placeholder="Search memo #, account, UPC or product" value="${esc(this.search)}">
+                <div class="btn-group btn-group-sm">${filters.map(([key, label]) =>
+                    `<button type="button" class="btn ${this.filter === key ? 'btn-primary' : 'btn-outline-secondary'}" data-memo-filter="${key}">${label}</button>`).join('')}</div>
+            </div>
+            ${memos.length ? memos.map(m => `
+                <div class="memo-card">
+                    <div class="memo-head">
+                        <strong>Credit memo #${esc(m.number)}</strong>
+                        <span class="text-muted">${esc(m.date)}</span>
+                        <span>${esc(m.account_no)} ${m.business_name ? `— ${esc(m.business_name)}` : ''}</span>
+                        <span class="ms-auto text-muted small">Memo total ${money(m.total)}</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 memo-table">
+                            <thead><tr><th>UPC</th><th>Product</th><th class="text-end">Qty</th><th class="text-end">Price</th><th>In this pull</th></tr></thead>
+                            <tbody>${m.shown.map(l => `
+                                <tr>
+                                    <td><code>${esc(l.upc)}</code></td>
+                                    <td>${esc(l.description)}</td>
+                                    <td class="text-end">${l.qty}</td>
+                                    <td class="text-end">${money(l.unit_price)}</td>
+                                    <td><span class="status-pill status-${cls[l.outcome.kind]}">${esc(l.outcome.text)}</span></td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`).join('') : '<p class="text-muted">No credit memos match.</p>'}`;
+
+        const search = body.querySelector('#memoSearch');
+        search.addEventListener('input', utils.debounce(() => {
+            this.search = search.value;
+            this.render();
+            const again = document.getElementById('memoSearch');
+            again.focus();
+            again.setSelectionRange(again.value.length, again.value.length);
+        }, 200));
+        body.querySelectorAll('[data-memo-filter]').forEach(b => b.addEventListener('click', () => {
+            this.filter = b.dataset.memoFilter;
+            this.render();
+        }));
+    }
+};
+
+// The credit memo modal can open on top of the preset editor; closing it must leave the editor's page lock in place
+document.getElementById('creditMemoModal')?.addEventListener('hidden.bs.modal', () => {
+    if (document.querySelector('.modal.show')) document.body.classList.add('modal-open');
+});
+
+document.addEventListener('click', (e) => {
+    const trigger = e.target.closest('[data-credit-memos]');
+    if (!trigger) return;
+    e.preventDefault();
+    if (trigger.dataset.creditMemos === 'test') {
+        creditMemoViewer.open({ kind: 'test' }, salesPresetManager.testResult?.summary, trigger.dataset.upc || '');
+        return;
+    }
+    const runId = Number(trigger.dataset.run);
+    const fileId = Number(trigger.dataset.file);
+    const run = [monthlyRunManager.run, batchHistoryManager.current].find(r => r?.id === runId);
+    const file = run?.files.find(f => f.id === fileId);
+    creditMemoViewer.open({ kind: 'file', runId, fileId }, file?.source, trigger.dataset.upc || '');
+});
 
 const salesPresetManager = new SalesPresetManager();
