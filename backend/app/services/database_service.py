@@ -780,6 +780,19 @@ class DatabaseService:
             ORDER BY ProductDescription
         """, [f'%{term}%', f'%{term}%'])
 
+    def get_subcategory_items(self, subcategory_ids: List[int], limit: int) -> Tuple[bool, List[Dict[str, Any]], str]:
+        """Catalog products in the subcategories, for previewing what a sales preset covers"""
+        if not subcategory_ids:
+            return True, [], "No subcategories selected"
+        sub_marks = ','.join('?' for _ in subcategory_ids)
+        return self.execute_query(f"""
+            SELECT TOP {int(limit)} ProductUPC AS upc, ProductDescription AS description, SubCateID AS subcategory_id,
+                   UnitCost AS cost, QuantOnHand AS on_hand, Discontinued AS discontinued
+            FROM Items_tbl
+            WHERE SubCateID IN ({sub_marks})
+            ORDER BY ProductDescription
+        """, list(subcategory_ids))
+
     def get_sales_lines(self, start, end, subcategory_ids: List[int], exclude_accounts: List[str]) -> Tuple[bool, List[Dict[str, Any]], str]:
         """Non-voided invoice lines of [start, end) in the subcategories, grouped by UPC and unit cost"""
         if not subcategory_ids:

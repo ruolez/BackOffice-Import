@@ -1811,6 +1811,27 @@ html[data-bs-theme="dark"] .segmented .nav-link.active { background: var(--surfa
     padding: 2px 10px 10px 40px;
 }
 .preset-sub { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 0.8125rem; }
+.tree-peek {
+    border: 0;
+    background: transparent;
+    color: var(--text-3);
+    padding: 0 4px;
+    font-size: 0.75rem;
+    line-height: 1;
+    opacity: 0;
+    cursor: pointer;
+}
+.preset-cat summary:hover .tree-peek, .preset-sub:hover .tree-peek, .tree-peek:focus-visible { opacity: 1; }
+.tree-peek:hover { color: var(--primary); }
+@media (hover: none) { .tree-peek { opacity: 1; } }
+.product-preview-table { table-layout: fixed; }
+.product-preview-table th:nth-child(1) { width: 16%; }
+.product-preview-table th:nth-child(3), .product-preview-table th:nth-child(4) { width: 10%; }
+.product-preview-table th:nth-child(5) { width: 28%; }
+.product-preview-table td { overflow-wrap: anywhere; }
+/* Viewers that open on top of the preset editor: keep the editor under their backdrop */
+#creditMemoModal, #productPreviewModal { z-index: 1065; }
+.modal-backdrop ~ .modal-backdrop { z-index: 1060; }
 .badge-new {
     font-size: 0.6875rem;
     padding: 0 6px;

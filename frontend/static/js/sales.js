@@ -310,6 +310,8 @@ class SalesPresetManager {
                 <span class="text-muted small text-nowrap"><strong>${this.selected.size}</strong> of ${total} selected</span>
                 <button type="button" class="btn btn-sm btn-outline-secondary" data-tree-all="1">Select ${term ? 'shown' : 'all'}</button>
                 <button type="button" class="btn btn-sm btn-outline-secondary" data-tree-all="0">Clear ${term ? 'shown' : 'all'}</button>
+                <button type="button" class="btn btn-sm btn-outline-primary" data-peek-selected ${this.selected.size ? '' : 'disabled'}
+                    title="See the products in the selected subcategories"><i class="fas fa-eye me-1"></i>Preview selected</button>
             </div>
             <div class="preset-tree-list">${groups.map(c => {
                 const picked = c.subs.filter(s => this.selected.has(s.id)).length;
@@ -321,12 +323,14 @@ class SalesPresetManager {
                             ${picked > 0 && picked < c.subs.length ? 'data-partial="1"' : ''} aria-label="Select all of ${esc(c.name)}">
                         <span class="preset-cat-name">${esc(c.name)}</span>
                         <span class="text-muted small">${picked} / ${c.subs.length}</span>
+                        <button type="button" class="tree-peek" data-peek-cat="${c.id}" title="Preview products in ${esc(c.name)}"><i class="fas fa-eye"></i></button>
                     </summary>
                     <div class="preset-subs">${c.shown.map(s => `
                         <label class="preset-sub">
                             <input type="checkbox" class="form-check-input" data-sub="${s.id}" ${this.selected.has(s.id) ? 'checked' : ''}>
                             <span>${esc(s.name)}</span>
                             ${known.size && !known.has(s.id) ? '<span class="badge-new">new</span>' : ''}
+                            <button type="button" class="tree-peek" data-peek-sub="${s.id}" title="Preview products in ${esc(s.name)}"><i class="fas fa-eye"></i></button>
                         </label>`).join('')}
                     </div>
                 </details>`;
@@ -358,6 +362,19 @@ class SalesPresetManager {
             const on = b.dataset.treeAll === '1';
             groups.flatMap(g => g.shown).forEach(s => on ? this.selected.add(s.id) : this.selected.delete(s.id));
             this.renderTree();
+        }));
+        el.querySelector('[data-peek-selected]').addEventListener('click', () =>
+            productPreviewer.open('Selected subcategories', [...this.selected]));
+        el.querySelectorAll('[data-peek-cat]').forEach(b => b.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const category = this.tree.categories.find(c => c.id === Number(b.dataset.peekCat));
+            productPreviewer.open(category.name, (subsByCategory[category.id] || []).map(s => s.id));
+        }));
+        el.querySelectorAll('[data-peek-sub]').forEach(b => b.addEventListener('click', e => {
+            e.preventDefault();
+            const sub = this.tree.subcategories.find(s => s.id === Number(b.dataset.peekSub));
+            productPreviewer.open(sub.name, [sub.id]);
         }));
     }
 
@@ -570,10 +587,100 @@ const creditMemoViewer = {
     }
 };
 
-// The credit memo modal can open on top of the preset editor; closing it must leave the editor's page lock in place
-document.getElementById('creditMemoModal')?.addEventListener('hidden.bs.modal', () => {
+// Product preview: the store's catalog products in some subcategories, and which ones the preset would leave out
+const productPreviewer = {
+    async open(title, subcategoryIds) {
+        this.filter = 'all';
+        this.search = '';
+        this.products = null;
+        const body = document.getElementById('productPreviewModalBody');
+        document.getElementById('productPreviewModalTitle').textContent = `Products · ${title}`;
+        body.innerHTML = '<p class="text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Loading products…</p>';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('productPreviewModal')).show();
+        try {
+            const response = await api.previewPresetProducts({ ...salesPresetManager.payload(), subcategory_ids: subcategoryIds });
+            this.products = response.products;
+            this.truncated = response.truncated;
+            this.render();
+        } catch (error) {
+            body.innerHTML = `<div class="alert alert-danger">Could not load products: ${esc(error.message)}</div>`;
+        }
+    },
+
+    render() {
+        const body = document.getElementById('productPreviewModalBody');
+        const tree = salesPresetManager.tree || { categories: [], subcategories: [] };
+        const subs = Object.fromEntries(tree.subcategories.map(s => [s.id, s]));
+        const categories = Object.fromEntries(tree.categories.map(c => [c.id, c.name]));
+        const term = this.search.trim().toLowerCase();
+        const reasons = { upc: 'Left out: excluded product', word: 'Left out: name contains excluded text' };
+        const filters = [['all', 'All'], ['included', 'Included'], ['excluded', 'Left out']];
+
+        const shown = this.products.filter(p =>
+            (this.filter === 'all' || (this.filter === 'excluded') === Boolean(p.excluded)) &&
+            (!term || p.upc.toLowerCase().includes(term) || p.description.toLowerCase().includes(term)));
+        const groups = {};
+        shown.forEach(p => { (groups[p.subcategory_id] = groups[p.subcategory_id] || []).push(p); });
+        const label = id => {
+            const sub = subs[id];
+            if (!sub) return `Subcategory ${id}`;
+            return categories[sub.category_id] ? `${categories[sub.category_id]} › ${sub.name}` : sub.name;
+        };
+        const ordered = Object.keys(groups).sort((a, b) => label(a).localeCompare(label(b)));
+        const leftOut = this.products.filter(p => p.excluded).length;
+
+        body.innerHTML = `
+            <div class="memo-toolbar">
+                <div class="text-muted small"><strong>${this.products.length}${this.truncated ? '+' : ''}</strong> product(s) · ${this.products.length - leftOut} included · ${leftOut} left out by the preset
+                    <span class="d-block">Products in the store's catalog. A pull only includes the ones sold last month.</span></div>
+                <input class="form-control form-control-sm" id="productPreviewSearch" placeholder="Search UPC or product" value="${esc(this.search)}">
+                <div class="btn-group btn-group-sm">${filters.map(([key, text]) =>
+                    `<button type="button" class="btn ${this.filter === key ? 'btn-primary' : 'btn-outline-secondary'}" data-product-filter="${key}">${text}</button>`).join('')}</div>
+            </div>
+            ${this.truncated ? `<div class="alert alert-warning py-2 small">Showing the first ${this.products.length} products. Preview a smaller category or subcategory to see all of them.</div>` : ''}
+            ${ordered.length ? ordered.map(id => `
+                <div class="memo-card">
+                    <div class="memo-head">
+                        <strong>${esc(label(id))}</strong>
+                        <span class="ms-auto text-muted small">${groups[id].length} product(s)</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0 product-preview-table">
+                            <thead><tr><th>UPC</th><th>Product</th><th class="text-end">Cost</th><th class="text-end">On hand</th><th>In a pull</th></tr></thead>
+                            <tbody>${groups[id].map(p => `
+                                <tr class="${p.excluded ? 'text-muted' : ''}">
+                                    <td><code>${esc(p.upc)}</code></td>
+                                    <td>${esc(p.description)}${p.discontinued ? ' <span class="badge-new">discontinued</span>' : ''}</td>
+                                    <td class="text-end">${money(p.cost)}</td>
+                                    <td class="text-end">${Math.round(p.on_hand * 100) / 100}</td>
+                                    <td>${p.excluded
+                                        ? `<span class="status-pill status-muted">${reasons[p.excluded]}</span>`
+                                        : '<span class="status-pill status-success">Included</span>'}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>`).join('') : '<p class="text-muted">No products match.</p>'}`;
+
+        const search = body.querySelector('#productPreviewSearch');
+        search.addEventListener('input', utils.debounce(() => {
+            this.search = search.value;
+            this.render();
+            const again = document.getElementById('productPreviewSearch');
+            again.focus();
+            again.setSelectionRange(again.value.length, again.value.length);
+        }, 200));
+        body.querySelectorAll('[data-product-filter]').forEach(b => b.addEventListener('click', () => {
+            this.filter = b.dataset.productFilter;
+            this.render();
+        }));
+    }
+};
+
+// These modals open on top of the preset editor; closing one must leave the editor's page lock in place
+['creditMemoModal', 'productPreviewModal'].forEach(id => document.getElementById(id)?.addEventListener('hidden.bs.modal', () => {
     if (document.querySelector('.modal.show')) document.body.classList.add('modal-open');
-});
+}));
 
 document.addEventListener('click', (e) => {
     const trigger = e.target.closest('[data-credit-memos]');

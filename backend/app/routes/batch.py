@@ -479,6 +479,24 @@ def test_preset_credit_memos():
     return jsonify({'success': True, 'memos': memos, 'period_label': sales.month_label(period)}), 200
 
 
+@bp.route('/presets/products', methods=['POST'])
+@login_required
+def preview_preset_products():
+    """Catalog products of the given subcategories, marked with the preset exclusions that would leave them out"""
+    preset = sales.clean_preset(request.get_json(silent=True) or {})
+    config = _config_or_404(preset['source_config_id']) if preset['source_config_id'] else None
+    if not config:
+        return jsonify({'error': 'Database configuration not found'}), 404
+    if not preset['subcategory_ids']:
+        return jsonify({'error': 'Choose at least one subcategory'}), 400
+    try:
+        products, truncated = sales.products_for(preset['subcategory_ids'], preset['exclude_upcs'],
+                                                 preset['exclude_words'], DatabaseService(config))
+    except sales.PullError as e:
+        return jsonify({'error': str(e)}), 502
+    return jsonify({'success': True, 'products': products, 'truncated': truncated}), 200
+
+
 @bp.route('/sources/<int:config_id>/categories', methods=['GET'])
 @login_required
 def source_categories(config_id):

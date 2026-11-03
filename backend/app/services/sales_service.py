@@ -3,7 +3,7 @@ less credit memos, turned into the same UPC / Cost / QTY rows an Excel sales rep
 
 import json
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.models import SalesPreset
 
@@ -107,12 +107,8 @@ def _qty(value) -> float:
         return 0.0
 
 
-def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
-                     exclude_upcs: List[str], exclude_words: List[str]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Rows (UPC, Cost, QTY) from sales grouped by UPC + unit cost, less credit memo quantities by UPC.
-
-    A credit comes off the product's most recent sale line first, then the next most recent.
-    Lines that end at zero or below are dropped and reported."""
+def exclusion_matcher(exclude_upcs: List[str], exclude_words: List[str]) -> Callable[[str, str], Optional[str]]:
+    """Which preset exclusion removes a product: 'upc', 'word' (its name contains the text) or None"""
     upcs = set(_clean_list(exclude_upcs))
     words = [w.lower() for w in _clean_list(exclude_words)]
 
@@ -121,6 +117,16 @@ def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
             return 'upc'
         text = (description or '').lower()
         return 'word' if any(w in text for w in words) else None
+    return exclusion
+
+
+def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
+                     exclude_upcs: List[str], exclude_words: List[str]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Rows (UPC, Cost, QTY) from sales grouped by UPC + unit cost, less credit memo quantities by UPC.
+
+    A credit comes off the product's most recent sale line first, then the next most recent.
+    Lines that end at zero or below are dropped and reported."""
+    exclusion = exclusion_matcher(exclude_upcs, exclude_words)
 
     summary = {
         'sale_lines': sum(int(s.get('line_count') or 1) for s in sales),
@@ -248,6 +254,35 @@ def credit_memos_for(preset: SalesPreset, period: str, service) -> List[Dict[str
     if not ok:
         raise PullError(f'Could not read credit memos: {message}')
     return group_credit_memos(lines)
+
+
+def preview_products(items: List[Dict[str, Any]], exclude_upcs: List[str],
+                     exclude_words: List[str]) -> List[Dict[str, Any]]:
+    """Catalog products of the chosen subcategories, marked with the exclusion that would leave them out of a pull"""
+    exclusion = exclusion_matcher(exclude_upcs, exclude_words)
+    products = []
+    for item in items:
+        upc = str(item.get('upc') or '').strip()
+        description = item.get('description') or ''
+        products.append({
+            'upc': upc,
+            'description': description,
+            'subcategory_id': item.get('subcategory_id'),
+            'cost': round(float(item.get('cost') or 0), 2),
+            'on_hand': _qty(item.get('on_hand')),
+            'discontinued': bool(item.get('discontinued')),
+            'excluded': exclusion(upc, description),
+        })
+    return products
+
+
+def products_for(subcategory_ids: List[int], exclude_upcs: List[str], exclude_words: List[str], service,
+                 limit: int = 5000) -> Tuple[List[Dict[str, Any]], bool]:
+    """Up to `limit` products of the subcategories, and whether there were more"""
+    ok, items, message = service.get_subcategory_items(subcategory_ids, limit + 1)
+    if not ok:
+        raise PullError(f'Could not read products: {message}')
+    return preview_products(items[:limit], exclude_upcs, exclude_words), len(items) > limit
 
 
 def pull_preset(preset: SalesPreset, period: str, service) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:

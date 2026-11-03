@@ -181,3 +181,30 @@ class TestGroupCreditMemos:
 
         assert sales.credit_memos_for(make_preset(), '2026-02', store) == []
         assert calls == [(datetime(2026, 2, 1), datetime(2026, 3, 1), [4, 5], ['INT01'])]
+
+
+class TestPreviewProducts:
+    def test_products_are_marked_with_the_exclusion_that_would_remove_them_from_a_pull(self):
+        items = [{'upc': ' 111 ', 'description': 'Cola 12oz', 'subcategory_id': 4, 'cost': 1.5, 'on_hand': 3,
+                  'discontinued': None},
+                 {'upc': '222', 'description': 'SAMPLE Chips', 'subcategory_id': 5, 'cost': None, 'on_hand': None,
+                  'discontinued': 1},
+                 {'upc': '333', 'description': 'Water', 'subcategory_id': 4, 'cost': 0.5, 'on_hand': 0,
+                  'discontinued': 0}]
+
+        assert sales.preview_products(items, ['333'], ['sample']) == [
+            {'upc': '111', 'description': 'Cola 12oz', 'subcategory_id': 4, 'cost': 1.5, 'on_hand': 3.0,
+             'discontinued': False, 'excluded': None},
+            {'upc': '222', 'description': 'SAMPLE Chips', 'subcategory_id': 5, 'cost': 0.0, 'on_hand': 0.0,
+             'discontinued': True, 'excluded': 'word'},
+            {'upc': '333', 'description': 'Water', 'subcategory_id': 4, 'cost': 0.5, 'on_hand': 0.0,
+             'discontinued': False, 'excluded': 'upc'},
+        ]
+
+    def test_product_preview_reads_the_chosen_subcategories(self):
+        store = SalesBackOffice([], [], [])
+        calls = []
+        store.get_subcategory_items = lambda ids, limit: (calls.append((ids, limit)), (True, [], 'ok'))[1]
+
+        assert sales.products_for([4, 5], [], [], store, limit=10) == ([], False)
+        assert calls == [([4, 5], 11)]
