@@ -138,7 +138,8 @@ def _document_header(document: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in document.items() if k not in ('lines', 'summary')}
 
 
-def _summary(step_type: str, document: Dict[str, Any], missing: List[Dict[str, Any]], products_added: int) -> Dict[str, Any]:
+def _summary(step_type: str, document: Dict[str, Any], missing: List[Dict[str, Any]], products_added: int,
+             from_copy: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
     total = document.get('po_total') if step_type == 'po' else document.get('invoice_total')
     return {
         'lines': document.get('no_lines', 0),
@@ -150,10 +151,13 @@ def _summary(step_type: str, document: Dict[str, Any], missing: List[Dict[str, A
             for m in missing
         ],
         'products_added': products_added,
+        'from_copy': list(from_copy),
     }
 
 
-def _excel_document(step_type: str, db_service, rows: List[Dict[str, Any]], party_id: int):
+def _excel_document(step_type: str, db_service, rows: List[Dict[str, Any]], party_id: int,
+                    planned_items: Dict[str, Dict[str, Any]] = None):
+    """planned_items (preview only): UPC → product an earlier copy step adds to this database before this step runs"""
     if step_type == 'po':
         ok, party, message = db_service.get_supplier_by_id(party_id)
         processor = PurchaseOrderService(db_service)
@@ -166,6 +170,14 @@ def _excel_document(step_type: str, db_service, rows: List[Dict[str, Any]], part
     ok, items, message = db_service.get_items_by_upcs([row['UPC'] for row in rows])
     if not ok:
         raise StepError(message)
+    found = {str(item.get('ProductUPC', '')) for item in items}
+    from_copy = []
+    for upc in dict.fromkeys(str(row['UPC']) for row in rows):
+        planned = (planned_items or {}).get(upc)
+        if planned and upc not in found:
+            items.append({**planned['item'], 'ProductID': None})
+            from_copy.append({'upc': upc, 'description': planned['item'].get('ProductDescription') or '',
+                              'step_key': planned['step_key']})
 
     ok, document, missing, message = processor.process_excel_data(rows, items, party)
     descriptions = {row.get('row_number'): row.get('description') for row in rows if row.get('description')}
@@ -173,7 +185,7 @@ def _excel_document(step_type: str, db_service, rows: List[Dict[str, Any]], part
         entry.setdefault('description', descriptions.get(entry.get('row_number')))
     if not ok:
         raise StepError(message, {'missing_upcs': missing})
-    return document, missing
+    return document, missing, from_copy
 
 
 def _copy_document(source_service, dest_service, source_lines: List[Dict[str, Any]], source_number,
@@ -195,6 +207,7 @@ def _copy_document(source_service, dest_service, source_lines: List[Dict[str, An
     found = {str(item.get('ProductUPC', '')) for item in dest_items}
     absent = [upc for upc in upcs if upc not in found]
     products_added = 0
+    source_items = []
     if absent:
         ok, source_items, message = source_service.get_full_items_by_upcs(absent)
         if not ok:
@@ -219,7 +232,7 @@ def _copy_document(source_service, dest_service, source_lines: List[Dict[str, An
     )
     if not ok:
         raise StepError(message, {'missing_upcs': missing})
-    return document, missing, products_added
+    return document, missing, products_added, source_items
 
 
 def step_title(step: BatchRunStep) -> str:
@@ -284,6 +297,8 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
     rows = json.loads(run_file.rows_json or '[]')
     steps_by_key = {s.step_key: s for s in run_file.steps}
     documents: Dict[str, Dict[str, Any]] = {}
+    # database id → UPC → product that a copy step earlier in this file adds there when the run gets to it
+    planned_items: Dict[int, Dict[str, Dict[str, Any]]] = {}
     checked = 0
 
     for step in run_file.steps:
@@ -299,15 +314,22 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
             if step.type == 'copy':
                 source_lines, source_number = _copy_source_for_preview(step, steps_by_key, documents, configs, service_for)
                 source_service = service_for(configs[steps_by_key[step.source_step_key].database_config_id])
-                document, missing, added = _copy_document(
+                document, missing, added, new_items = _copy_document(
                     source_service, service, source_lines, source_number, step.party_id, add_products=False
                 )
+                from_copy = []
+                source_status = steps_by_key[step.source_step_key].status
+                if step.status in RETRYABLE_STATUSES and source_status in RETRYABLE_STATUSES + ('success',):
+                    for item in new_items:
+                        planned_items.setdefault(step.database_config_id, {}).setdefault(
+                            str(item.get('ProductUPC', '')), {'item': item, 'step_key': step.step_key})
             else:
-                document, missing = _excel_document(step.type, service, rows, step.party_id)
+                document, missing, from_copy = _excel_document(step.type, service, rows, step.party_id,
+                                                               planned_items.get(step.database_config_id))
                 added = 0
             documents[step.step_key] = document
             step.base_number = int(_document_number(step.type, document))
-            step.preview_json = json.dumps(_summary(step.type, document, missing, added), default=str)
+            step.preview_json = json.dumps(_summary(step.type, document, missing, added, from_copy), default=str)
             if step.status == 'excluded' and previous.get('error'):
                 step.status = 'pending'
                 step.message = None
@@ -424,11 +446,11 @@ def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: 
         ok, data, message = source_service.get_invoice_with_details(source.doc_id)
         if not ok:
             raise StepError(f'Could not read invoice #{source.doc_number} from {source.database_name}: {message}')
-        document, missing, added = _copy_document(
+        document, missing, added, _ = _copy_document(
             source_service, service, data['details'], source.doc_number, step.party_id, add_products=True
         )
     else:
-        document, missing = _excel_document(step.type, service, rows, step.party_id)
+        document, missing, _ = _excel_document(step.type, service, rows, step.party_id)
         added = 0
 
     number = _document_number(step.type, document)

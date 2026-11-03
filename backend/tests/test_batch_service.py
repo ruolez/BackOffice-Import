@@ -544,3 +544,47 @@ class TestRecheck:
         copy_preview = json.loads(setup['file'].steps[1].preview_json)
         assert (checked, copy_preview['lines'], copy_preview['total'], copy_preview['products_added']) == (1, 2, 14.0, 1)
         assert statuses(setup['file']) == [('inv', 'success', '500'), ('cp', 'failed', None), ('po', 'success', '70')]
+
+
+class TestProductsAddedByAnEarlierCopy:
+    @pytest.fixture
+    def with_po_after_copy(self, setup):
+        """The rule also makes a PO in DB-B after the copy; DB-B lacks 222, which the copy adds"""
+        setup['fakes'][setup['b']].suppliers = {3: SUPPLIER_A}
+        rule = BatchRule.query.first()
+        rule.steps_json = json.dumps(json.loads(rule.steps_json) + [
+            {'id': 'po_b', 'type': 'po', 'database_config_id': setup['b'], 'party_id': 3, 'party_label': 'SUP'}])
+        batch.plan_file(setup['file'], rule, batch.user_configs(setup['run'].user_id), setup['service_for'])
+        db.session.commit()
+        return setup
+
+    def po_b_preview(self, setup):
+        step = next(s for s in setup['file'].steps if s.step_key == 'po_b')
+        preview = json.loads(step.preview_json)
+        return (preview['lines'], [m['upc'] for m in preview['missing_upcs']],
+                [(m['upc'], m['step_key']) for m in preview['from_copy']])
+
+    def test_products_the_copy_adds_first_are_not_reported_missing(self, with_po_after_copy):
+        assert self.po_b_preview(with_po_after_copy) == (2, ['999'], [('222', 'cp')])
+
+    def test_products_count_as_missing_again_when_the_copy_will_not_run(self, with_po_after_copy):
+        copy = next(s for s in with_po_after_copy['file'].steps if s.step_key == 'cp')
+        batch.set_step_hold(copy, True)
+        batch.preview_file(with_po_after_copy['file'], batch.user_configs(with_po_after_copy['run'].user_id),
+                           with_po_after_copy['service_for'])
+
+        assert self.po_b_preview(with_po_after_copy) == (1, ['222', '999'], [])
+
+    def test_the_po_includes_the_products_the_copy_added(self, with_po_after_copy):
+        run_now(with_po_after_copy)
+
+        po = with_po_after_copy['fakes'][with_po_after_copy['b']].pos
+        assert [l['ProductUPC'] for d in po.values() for l in d['lines']] == ['111', '222']
+
+    def test_products_count_as_missing_when_the_invoice_the_copy_copies_is_unticked(self, with_po_after_copy):
+        invoice = next(s for s in with_po_after_copy['file'].steps if s.step_key == 'inv')
+        invoice.status = 'excluded'
+        batch.preview_file(with_po_after_copy['file'], batch.user_configs(with_po_after_copy['run'].user_id),
+                           with_po_after_copy['service_for'])
+
+        assert self.po_b_preview(with_po_after_copy) == (1, ['222', '999'], [])

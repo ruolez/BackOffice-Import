@@ -121,6 +121,17 @@ function renderBatchSteps(file, canToggle) {
                     </ul>
                 </details>`);
         }
+        if (p.from_copy?.length && step.status !== 'success') {
+            const willRun = s => s && (s.status === 'success' || RETRYABLE.includes(s.status));
+            const copy = byKey[p.from_copy[0].step_key];
+            const copyRuns = willRun(copy) && (copy.status === 'success' || willRun(byKey[copy.source_step_key]));
+            const list = `<ul class="batch-upc-list">${p.from_copy.map(m =>
+                `<li><code>${esc(m.upc)}</code>${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}</ul>`;
+            issues.push(copyRuns
+                ? `<details class="batch-issue"><summary class="text-info">${p.from_copy.length} product(s) not in ${esc(step.database_name)} yet: the copy step adds them first</summary>${list}</details>`
+                : `<details class="batch-issue"><summary class="text-warning">${p.from_copy.length} UPC(s) would come from the copy step, which ${copy?.status === 'held' ? 'is on hold' : 'will not run'}: lines skipped</summary>${list}
+                       <div class="text-muted small">Press Re-check to update the line count and total.</div></details>`);
+        }
         if (step.status === 'held' && (p.error || p.missing_upcs?.length)) {
             issues.push(`<div class="batch-issue text-muted">Fix it in BackOffice, press Re-check, then Resume and create</div>`);
         }
