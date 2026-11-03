@@ -139,7 +139,7 @@ def _document_header(document: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _summary(step_type: str, document: Dict[str, Any], missing: List[Dict[str, Any]], products_added: int,
-             from_copy: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
+             from_copy: List[Dict[str, Any]] = (), added_items: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
     total = document.get('po_total') if step_type == 'po' else document.get('invoice_total')
     return {
         'lines': document.get('no_lines', 0),
@@ -151,6 +151,8 @@ def _summary(step_type: str, document: Dict[str, Any], missing: List[Dict[str, A
             for m in missing
         ],
         'products_added': products_added,
+        'added_products': [{'upc': str(i.get('ProductUPC', '')), 'description': i.get('ProductDescription') or ''}
+                           for i in added_items],
         'from_copy': list(from_copy),
     }
 
@@ -299,6 +301,7 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
     documents: Dict[str, Dict[str, Any]] = {}
     # database id → UPC → product that a copy step earlier in this file adds there when the run gets to it
     planned_items: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    summaries: Dict[str, Dict[str, Any]] = {}
     checked = 0
 
     for step in run_file.steps:
@@ -318,6 +321,7 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
                     source_service, service, source_lines, source_number, step.party_id, add_products=False
                 )
                 from_copy = []
+                summary_extra = {'added_items': new_items}
                 source_status = steps_by_key[step.source_step_key].status
                 if step.status in RETRYABLE_STATUSES and source_status in RETRYABLE_STATUSES + ('success',):
                     for item in new_items:
@@ -326,10 +330,11 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
             else:
                 document, missing, from_copy = _excel_document(step.type, service, rows, step.party_id,
                                                                planned_items.get(step.database_config_id))
-                added = 0
+                added, summary_extra = 0, {}
             documents[step.step_key] = document
             step.base_number = int(_document_number(step.type, document))
-            step.preview_json = json.dumps(_summary(step.type, document, missing, added, from_copy), default=str)
+            summaries[step.step_key] = _summary(step.type, document, missing, added, from_copy, **summary_extra)
+            step.preview_json = json.dumps(summaries[step.step_key], default=str)
             if step.status == 'excluded' and previous.get('error'):
                 step.status = 'pending'
                 step.message = None
@@ -344,7 +349,31 @@ def preview_file(run_file: BatchRunFile, configs: Dict[int, DatabaseConfig],
             _preview_failed(run, run_file, step, str(e), e.details, 'warning')
         except Exception as e:
             _preview_failed(run, run_file, step, f'Unexpected error: {e}', None, 'error', traceback.format_exc())
+    _mark_products_a_later_copy_adds(run_file.steps, summaries)
     return checked
+
+
+def _mark_products_a_later_copy_adds(steps: List[BatchRunStep], summaries: Dict[str, Dict[str, Any]]):
+    """A step that runs before a copy into its database cannot use the products that copy adds:
+    tag those missing UPCs with the copy's step key so the user can move the step below the copy"""
+    statuses = {s.step_key: s.status for s in steps}
+    for copy in steps:
+        added = {p['upc'] for p in summaries.get(copy.step_key, {}).get('added_products', [])}
+        if copy.type != 'copy' or not added or copy.status not in RETRYABLE_STATUSES \
+                or statuses.get(copy.source_step_key) not in RETRYABLE_STATUSES + ('success',):
+            continue
+        for step in steps:
+            summary = summaries.get(step.step_key)
+            if step.position >= copy.position or step.type == 'copy' or step.database_config_id != copy.database_config_id \
+                    or not summary:
+                continue
+            tagged = False
+            for missing in summary['missing_upcs']:
+                if str(missing['upc']) in added and 'added_later_by' not in missing:
+                    missing['added_later_by'] = copy.step_key
+                    tagged = True
+            if tagged:
+                step.preview_json = json.dumps(summary, default=str)
 
 
 def _copy_source_for_preview(step, steps_by_key, documents, configs, service_for):
@@ -446,12 +475,12 @@ def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: 
         ok, data, message = source_service.get_invoice_with_details(source.doc_id)
         if not ok:
             raise StepError(f'Could not read invoice #{source.doc_number} from {source.database_name}: {message}')
-        document, missing, added, _ = _copy_document(
+        document, missing, added, added_items = _copy_document(
             source_service, service, data['details'], source.doc_number, step.party_id, add_products=True
         )
     else:
         document, missing, _ = _excel_document(step.type, service, rows, step.party_id)
-        added = 0
+        added, added_items = 0, []
 
     number = _document_number(step.type, document)
     before_create(number, _document_total(step.type, document))
@@ -462,7 +491,7 @@ def _execute_step(step: BatchRunStep, rows: List[Dict[str, Any]], steps_by_key: 
     if not ok:
         raise StepError(message)
 
-    return number, int(doc_id), _summary(step.type, document, missing, added)
+    return number, int(doc_id), _summary(step.type, document, missing, added, added_items=added_items)
 
 
 def _step_databases(step: BatchRunStep, steps_by_key: Dict[str, BatchRunStep]) -> List[int]:

@@ -588,3 +588,37 @@ class TestProductsAddedByAnEarlierCopy:
                            with_po_after_copy['service_for'])
 
         assert self.po_b_preview(with_po_after_copy) == (1, ['222', '999'], [])
+
+    def test_copy_preview_lists_the_products_it_adds(self, with_po_after_copy):
+        copy = next(s for s in with_po_after_copy['file'].steps if s.step_key == 'cp')
+        assert json.loads(copy.preview_json)['added_products'] == [{'upc': '222', 'description': 'Item 222'}]
+
+
+class TestStepThatRunsBeforeTheCopy:
+    @pytest.fixture
+    def with_po_before_copy(self, setup):
+        """A PO in DB-B listed above the copy that adds 222 to DB-B"""
+        setup['fakes'][setup['b']].suppliers = {3: SUPPLIER_A}
+        rule = BatchRule.query.first()
+        steps = json.loads(rule.steps_json)
+        steps.insert(1, {'id': 'po_b', 'type': 'po', 'database_config_id': setup['b'], 'party_id': 3,
+                         'party_label': 'SUP'})
+        rule.steps_json = json.dumps(steps)
+        batch.plan_file(setup['file'], rule, batch.user_configs(setup['run'].user_id), setup['service_for'])
+        db.session.commit()
+        return setup
+
+    def missing(self, setup):
+        step = next(s for s in setup['file'].steps if s.step_key == 'po_b')
+        return [(m['upc'], m.get('added_later_by')) for m in json.loads(step.preview_json)['missing_upcs']]
+
+    def test_products_the_later_copy_adds_are_tagged_with_that_copy(self, with_po_before_copy):
+        assert self.missing(with_po_before_copy) == [('222', 'cp'), ('999', None)]
+
+    def test_products_are_not_tagged_when_the_copy_is_on_hold(self, with_po_before_copy):
+        copy = next(s for s in with_po_before_copy['file'].steps if s.step_key == 'cp')
+        batch.set_step_hold(copy, True)
+        batch.preview_file(with_po_before_copy['file'], batch.user_configs(with_po_before_copy['run'].user_id),
+                           with_po_before_copy['service_for'])
+
+        assert self.missing(with_po_before_copy) == [('222', None), ('999', None)]

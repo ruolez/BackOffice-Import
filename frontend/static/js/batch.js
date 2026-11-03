@@ -6,6 +6,8 @@ const BATCH_STEP_TYPES = {
     copy: { label: 'Copy the invoice to another database', short: 'Copy invoice', icon: 'fa-copy', party: 'customer' }
 };
 
+const stepName = step => `${(BATCH_STEP_TYPES[step.type] || { short: step.type }).short} → ${step.database_name}`;
+
 const BATCH_STATUS = {
     pending: { label: 'Will create', cls: 'neutral', icon: 'fa-circle' },
     excluded: { label: 'Skipped', cls: 'muted', icon: 'fa-ban' },
@@ -112,14 +114,29 @@ function renderBatchSteps(file, canToggle) {
         if (step.type === 'copy' && included && byKey[step.source_step_key]?.status === 'excluded' && step.status !== 'success') {
             issues.push(`<div class="batch-issue text-warning">The invoice it copies is skipped, so this will not run</div>`);
         }
-        if (p.missing_upcs?.length) {
+        const upcList = list => `<ul class="batch-upc-list">${list.map(m =>
+            `<li><code>${esc(m.upc)}</code>${m.row && !m.description ? ` row ${m.row}` : ''}${m.qty != null ? ` · qty ${esc(m.qty)}` : ''}${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}</ul>`;
+        const notFound = (p.missing_upcs || []).filter(m => !m.added_later_by);
+        const addedLater = (p.missing_upcs || []).filter(m => m.added_later_by);
+        if (notFound.length) {
             issues.push(`
                 <details class="batch-issue">
-                    <summary class="text-warning">${p.missing_upcs.length} UPC(s) not found, lines skipped</summary>
-                    <ul class="batch-upc-list">${p.missing_upcs.map(m =>
-                        `<li><code>${esc(m.upc)}</code>${m.row && !m.description ? ` row ${m.row}` : ''}${m.qty != null ? ` · qty ${esc(m.qty)}` : ''}${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}
-                    </ul>
+                    <summary class="text-warning">${notFound.length} UPC(s) not found in ${esc(step.database_name)}, lines skipped</summary>
+                    ${upcList(notFound)}
                 </details>`);
+        }
+        if (addedLater.length && step.status !== 'success') {
+            const copy = byKey[addedLater[0].added_later_by];
+            issues.push(`
+                <details class="batch-issue">
+                    <summary class="text-warning">${addedLater.length} UPC(s) are added by ${copy ? esc(stepName(copy)) : 'a copy step'}, which runs after this step: lines skipped</summary>
+                    ${upcList(addedLater)}
+                    <div class="text-muted small">To include them, move this step below the copy in the rule, then choose the rule here again.</div>
+                </details>`);
+        }
+        if (step.status !== 'success' && !p.error && step.type !== 'copy' && p.missing_upcs?.length && !('from_copy' in p)
+                && file.steps.some(s => s.type === 'copy' && s.database_config_id === step.database_config_id)) {
+            issues.push(`<div class="batch-issue text-muted">Checked before products added by copy steps were counted. Press Re-check to update.</div>`);
         }
         if (p.from_copy?.length && step.status !== 'success') {
             const willRun = s => s && (s.status === 'success' || RETRYABLE.includes(s.status));
@@ -128,7 +145,7 @@ function renderBatchSteps(file, canToggle) {
             const list = `<ul class="batch-upc-list">${p.from_copy.map(m =>
                 `<li><code>${esc(m.upc)}</code>${m.description ? ` · ${esc(m.description)}` : ''}</li>`).join('')}</ul>`;
             issues.push(copyRuns
-                ? `<details class="batch-issue"><summary class="text-info">${p.from_copy.length} product(s) not in ${esc(step.database_name)} yet: the copy step adds them first</summary>${list}</details>`
+                ? `<details class="batch-issue"><summary class="text-info">${p.from_copy.length} product(s) not in ${esc(step.database_name)} yet: ${copy ? esc(stepName(copy)) : 'the copy step'} adds them first</summary>${list}</details>`
                 : `<details class="batch-issue"><summary class="text-warning">${p.from_copy.length} UPC(s) would come from the copy step, which ${copy?.status === 'held' ? 'is on hold' : 'will not run'}: lines skipped</summary>${list}
                        <div class="text-muted small">Press Re-check to update the line count and total.</div></details>`);
         }
@@ -144,7 +161,12 @@ function renderBatchSteps(file, canToggle) {
             issues.push(`<div class="batch-issue text-danger">Number #${esc(step.doc_number)} now exists ${p.duplicate_number} times in ${esc(step.database_name)}. Check the numbering</div>`);
         }
         if (p.products_added) {
-            issues.push(`<div class="batch-issue text-info">${p.products_added} product(s) ${step.status === 'success' ? 'were' : 'will be'} added to ${esc(step.database_name)}</div>`);
+            const text = `${p.products_added} product(s) ${step.status === 'success' ? 'were' : 'will be'} added to ${esc(step.database_name)}`;
+            const usedBy = file.steps.filter(s => s.status !== 'success' && s.preview?.from_copy?.some(m => m.step_key === step.key));
+            const usedNote = usedBy.length ? `<div class="text-muted small">${usedBy.map(s => esc(stepName(s))).join(', ')} ${usedBy.length > 1 ? 'use' : 'uses'} them too.</div>` : '';
+            issues.push(p.added_products?.length
+                ? `<details class="batch-issue"><summary class="text-info">${text}</summary>${upcList(p.added_products)}${usedNote}</details>`
+                : `<div class="batch-issue text-info">${text}</div>${usedNote ? `<div class="batch-issue">${usedNote}</div>` : ''}`);
         }
 
         return `
