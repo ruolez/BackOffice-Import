@@ -194,7 +194,7 @@ def build_sales_rows(sales: List[Dict[str, Any]], credits: List[Dict[str, Any]],
                                                  'over': remaining})
 
     rows = []
-    for line in sorted(lines, key=lambda l: (l['description'].lower(), l['upc'], l['cost'])):
+    for line in sorted(lines, key=lambda l: ((l['description'] or '').strip().casefold(), l['upc'], l['cost'])):
         net = round(line['sold'] - line['credited'], 4)
         if net <= 0:
             summary['dropped'].append({'upc': line['upc'], 'description': line['description'], 'cost': line['cost'],

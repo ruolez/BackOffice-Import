@@ -74,6 +74,14 @@ class TestBuildSalesRows:
                 summary['credits_without_sales'], summary['credits_excluded']) == (
             ['333'], ['222'], [], [{'upc': '222', 'description': '', 'qty': 9.0}])
 
+    def test_rows_are_sorted_by_product_name_ignoring_case_and_surrounding_spaces(self):
+        names = ['zig-zag papers', '  Cohiba', 'AL Fakher', 'Backwoods', 'al capone']
+        lines = [sale(str(i), 1, 1, 3, name) for i, name in enumerate(names)]
+
+        rows, _ = build_sales_rows(lines, [], [], [])
+
+        assert [r['description'] for r in rows] == ['al capone', 'AL Fakher', 'Backwoods', '  Cohiba', 'zig-zag papers']
+
     def test_lines_without_upc_are_skipped_and_counted(self):
         rows, summary = build_sales_rows([sale('', 1, 5, 3), sale(None, 1, 1, 3), sale('111', 1, 1, 3)], [], [], [])
 

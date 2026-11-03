@@ -419,8 +419,7 @@ class SalesPresetManager {
                                 ? `<button type="button" class="btn btn-link btn-sm p-0" data-credit-memos="test" data-upc="${esc(r.UPC)}" title="See the credit memos">${r.credited}</button>` : ''}</td><td class="text-end"><strong>${r.QTY}</strong></td></tr>`).join('')}
                     </tbody>
                 </table>
-            </div>
-            ${this.testResult.summary.rows > this.testResult.rows.length ? `<p class="text-muted small">Showing the first ${this.testResult.rows.length} of ${this.testResult.summary.rows} lines.</p>` : ''}`;
+            </div>`;
     }
 
     async save() {

@@ -458,7 +458,7 @@ def test_preset():
         rows, summary = sales.pull_preset(model, period, DatabaseService(_config_or_404(preset['source_config_id'])))
     except sales.PullError as e:
         return jsonify({'error': str(e)}), 502
-    return jsonify({'success': True, 'rows': rows[:200], 'summary': summary}), 200
+    return jsonify({'success': True, 'rows': rows, 'summary': summary}), 200
 
 
 @bp.route('/presets/test/credit-memos', methods=['POST'])
